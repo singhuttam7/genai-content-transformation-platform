@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ingestion.schemas import IngestionRequest
+from app.ingestion.schemas import (
+    IngestionRequest,
+    ProcessingStatus,
+)
 from app.models.source import Source
 
 
@@ -18,7 +21,7 @@ class SourcePersistenceService:
         request: IngestionRequest,
         storage_uri: str | None = None,
         content_hash: str | None = None,
-        status: str = "PENDING",
+        status: ProcessingStatus = ProcessingStatus.PENDING,
     ) -> Source:
         """Create a source record linked to the ingestion source ID."""
 
@@ -42,7 +45,7 @@ class SourcePersistenceService:
             storage_uri=storage_uri,
             content_hash=content_hash,
             source_metadata=request.metadata,
-            status=status,
+            status=status.value,
         )
 
         self.session.add(source)

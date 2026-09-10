@@ -49,60 +49,235 @@ class DefaultInputDetector(InputDetector):
         ".mov": InputType.VIDEO,
     }
 
+    FILE_INPUT_TYPES = {
+        InputType.PDF,
+        InputType.DOCX,
+        InputType.TXT,
+        InputType.MARKDOWN,
+        InputType.IMAGE,
+        InputType.AUDIO,
+        InputType.VIDEO,
+    }
+
     def detect(self, request: IngestionRequest) -> InputType:
         """Return the validated input type for a request."""
 
         input_type = request.input_type
 
-        # Text and prompt are explicit logical input types.
-        if input_type in {InputType.TEXT, InputType.PROMPT}:
-            if request.content is None:
-                raise ValueError(
-                    f"{input_type.value} input requires content."
-                )
+        # ---------------------------------------------------------
+        # TEXT / PROMPT
+        # ---------------------------------------------------------
+
+        if input_type in {
+            InputType.TEXT,
+            InputType.PROMPT,
+        }:
+            self._validate_text_input(request)
             return input_type
 
-        # URL must contain a valid HTTP(S) URL.
+        # ---------------------------------------------------------
+        # URL
+        # ---------------------------------------------------------
+
         if input_type == InputType.URL:
-            if not request.storage_uri:
-                raise ValueError("URL input requires storage_uri to contain the URL.")
-
-            parsed = urlparse(request.storage_uri)
-
-            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-                raise ValueError("Invalid URL input.")
-
+            self._validate_url(request)
             return InputType.URL
 
-        # MIME type validation.
-        if request.mime_type:
-            mime_type = request.mime_type.lower().strip()
+        # ---------------------------------------------------------
+        # FILE / BINARY INPUT
+        # ---------------------------------------------------------
 
-            detected_from_mime = self.MIME_MAP.get(mime_type)
+        if input_type in self.FILE_INPUT_TYPES:
+            self._validate_filename(request)
 
+            mime_type = self._normalize_mime_type(
+                request.mime_type
+            )
+
+            extension = self._normalize_extension(
+                request.filename
+            )
+
+            detected_from_mime = (
+                self.MIME_MAP.get(mime_type)
+                if mime_type
+                else None
+            )
+
+            detected_from_extension = (
+                self.EXTENSION_MAP.get(extension)
+                if extension
+                else None
+            )
+
+            # At least one reliable file indicator must exist.
+            if (
+                detected_from_mime is None
+                and detected_from_extension is None
+            ):
+                raise ValueError(
+                    "File input requires a supported MIME type "
+                    "or supported file extension."
+                )
+
+            # MIME type validation.
             if detected_from_mime is not None:
-                if not self._compatible(input_type, detected_from_mime):
+                if not self._compatible(
+                    input_type,
+                    detected_from_mime,
+                ):
                     raise ValueError(
                         f"Input type '{input_type.value}' is inconsistent "
                         f"with MIME type '{mime_type}'."
                     )
 
-                return input_type
-
-        # Filename extension validation.
-        if request.filename:
-            suffix = Path(request.filename).suffix.lower()
-
-            detected_from_extension = self.EXTENSION_MAP.get(suffix)
-
+            # Extension validation.
             if detected_from_extension is not None:
-                if not self._compatible(input_type, detected_from_extension):
+                if not self._compatible(
+                    input_type,
+                    detected_from_extension,
+                ):
                     raise ValueError(
                         f"Input type '{input_type.value}' is inconsistent "
-                        f"with file extension '{suffix}'."
+                        f"with file extension '{extension}'."
                     )
 
-        return input_type
+            # MIME and extension must agree when both are recognized.
+            if (
+                detected_from_mime is not None
+                and detected_from_extension is not None
+                and not self._compatible(
+                    detected_from_mime,
+                    detected_from_extension,
+                )
+            ):
+                raise ValueError(
+                    "MIME type and file extension represent "
+                    "different content types."
+                )
+
+            return input_type
+
+        raise ValueError(
+            f"Unsupported input type: {input_type.value}"
+        )
+
+    @staticmethod
+    def _validate_text_input(
+        request: IngestionRequest,
+    ) -> None:
+        """Validate text and prompt inputs."""
+
+        if request.content is None:
+            raise ValueError(
+                f"{request.input_type.value} input requires content."
+            )
+
+        if isinstance(request.content, bytes):
+            try:
+                text = request.content.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise ValueError(
+                    "Text and prompt content must be valid UTF-8."
+                ) from exc
+        else:
+            text = str(request.content)
+
+        if not text.strip():
+            raise ValueError(
+                f"{request.input_type.value} content cannot be empty."
+            )
+
+    @staticmethod
+    def _validate_url(
+        request: IngestionRequest,
+    ) -> None:
+        """Validate an external HTTP(S) URL."""
+
+        if not request.url:
+            raise ValueError(
+                "URL input requires a URL."
+            )
+
+        value = request.url.strip()
+
+        parsed = urlparse(value)
+
+        if parsed.scheme.lower() not in {
+            "http",
+            "https",
+        }:
+            raise ValueError(
+                "URL must use HTTP or HTTPS."
+            )
+
+        if not parsed.netloc:
+            raise ValueError(
+                "URL must contain a valid host."
+            )
+
+        if any(
+            character.isspace()
+            for character in value
+        ):
+            raise ValueError(
+                "URL cannot contain whitespace."
+            )
+
+    @staticmethod
+    def _validate_filename(
+        request: IngestionRequest,
+    ) -> None:
+        """Validate that the filename is a filename, not a path."""
+
+        if not request.filename:
+            return
+
+        filename = request.filename.replace(
+            "\\",
+            "/",
+        )
+
+        parts = filename.split("/")
+
+        if len(parts) != 1:
+            raise ValueError(
+                "Directory paths are not allowed in filenames."
+            )
+
+        if parts[0] in {
+            "",
+            ".",
+            "..",
+        }:
+            raise ValueError(
+                "Invalid filename."
+            )
+
+        # Reject Windows drive-style paths.
+        if len(parts[0]) >= 2 and parts[0][1] == ":":
+            raise ValueError(
+                "Absolute paths are not allowed."
+            )
+
+    @classmethod
+    def _normalize_mime_type(
+        cls,
+        mime_type: str | None,
+    ) -> str | None:
+        if not mime_type:
+            return None
+
+        return mime_type.split(";", 1)[0].strip().lower()
+
+    @staticmethod
+    def _normalize_extension(
+        filename: str | None,
+    ) -> str | None:
+        if not filename:
+            return None
+
+        return Path(filename).suffix.lower()
 
     @staticmethod
     def _compatible(
@@ -118,7 +293,10 @@ class DefaultInputDetector(InputDetector):
         if {
             declared_type,
             detected_type,
-        } == {InputType.TEXT, InputType.TXT}:
+        } == {
+            InputType.TEXT,
+            InputType.TXT,
+        }:
             return True
 
         return False

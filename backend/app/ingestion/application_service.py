@@ -6,66 +6,264 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ingestion.factory import create_ingestion_pipeline
 from app.ingestion.results import IngestionResult
-from app.ingestion.schemas import IngestionRequest
+from app.ingestion.schemas import (
+    IngestionRequest,
+    ProcessingStatus,
+)
 from app.ingestion.source_service import SourcePersistenceService
+from app.storage.compensation import StorageCompensationService
+from app.storage.errors import StorageCompensationError
 from app.storage.service import StorageService
 
 
 class IngestionApplicationService:
-    """Application-level orchestration for source ingestion."""
+    """
+    Application-level orchestration service for source ingestion.
+
+    Responsibilities:
+
+    - Generate a stable source identity.
+    - Persist the original source content.
+    - Persist source metadata in PostgreSQL.
+    - Execute the ingestion pipeline.
+    - Maintain source lifecycle state.
+    - Compensate storage when database persistence fails.
+    - Preserve compensation failures for recovery.
+    """
 
     def __init__(
         self,
         session: AsyncSession,
         storage: StorageService,
+        compensation: StorageCompensationService | None = None,
     ) -> None:
         self.session = session
         self.storage = storage
+
+        self.compensation = (
+            compensation
+            or StorageCompensationService(
+                storage_service=storage,
+            )
+        )
+
         self.pipeline = create_ingestion_pipeline()
-        self.source_service = SourcePersistenceService(session)
+
+        self.source_service = (
+            SourcePersistenceService(
+                session,
+            )
+        )
 
     async def ingest(
         self,
         *,
         request: IngestionRequest,
     ) -> IngestionResult:
-        """Store, persist, process, and normalize a source."""
+        """
+        Execute the complete source-ingestion lifecycle.
 
-        source_id = request.source_id or uuid4()
+        Lifecycle:
+
+            Upload
+                ↓
+            DB persistence
+                ↓
+            Commit
+                ↓
+            Processing
+                ↓
+            COMPLETED / FAILED
+
+        Database persistence failure:
+
+            Upload
+                ↓
+            DB failure
+                ↓
+            Rollback
+                ↓
+            Compensation
+        """
+
+        # =====================================================
+        # 1. Generate stable source identity
+        # =====================================================
+
+        source_id = (
+            request.source_id
+            or uuid4()
+        )
 
         storage_object = None
 
-        # ---------------------------------------------------------
-        # 1. Store original source
-        # ---------------------------------------------------------
+        # =====================================================
+        # 2. Upload original source content
+        # =====================================================
+
         if request.content is not None:
             content = (
                 request.content
-                if isinstance(request.content, bytes)
-                else request.content.encode("utf-8")
+                if isinstance(
+                    request.content,
+                    bytes,
+                )
+                else request.content.encode(
+                    "utf-8"
+                )
             )
 
-            storage_object = await self.storage.upload_source(
-                object_id=source_id,
-                filename=(
-                    request.filename
-                    or request.title
-                    or "source"
-                ),
-                content_type=(
-                    request.mime_type
-                    or "application/octet-stream"
-                ),
-                content=content,
-                metadata=request.metadata,
+            storage_object = (
+                await self.storage.upload_source(
+                    object_id=source_id,
+                    filename=(
+                        request.filename
+                        or request.title
+                        or "source"
+                    ),
+                    content_type=(
+                        request.mime_type
+                        or "application/octet-stream"
+                    ),
+                    content=content,
+                    metadata=request.metadata,
+                )
             )
 
-        # ---------------------------------------------------------
-        # 2. Persist source metadata
-        # ---------------------------------------------------------
-        source = await self.source_service.create_source(
-            request=request.model_copy(
-                update={"source_id": source_id}
+        # =====================================================
+        # 3. Prepare source request
+        # =====================================================
+
+        source_request = request.model_copy(
+            update={
+                "source_id": source_id,
+            }
+        )
+
+        # =====================================================
+        # 4. Persist source metadata
+        # =====================================================
+
+        try:
+            source = (
+                await self.source_service.create_source(
+                    request=source_request,
+                    storage_uri=(
+                        storage_object.uri
+                        if storage_object is not None
+                        else request.storage_uri
+                    ),
+                    content_hash=(
+                        storage_object.content_hash
+                        if storage_object is not None
+                        else None
+                    ),
+                    status=(
+                        ProcessingStatus.PROCESSING
+                    ),
+                )
+            )
+
+            await self.session.commit()
+
+        except Exception as original_error:
+            # -------------------------------------------------
+            # Roll back PostgreSQL transaction.
+            # -------------------------------------------------
+
+            await self.session.rollback()
+
+            # -------------------------------------------------
+            # Compensate successful storage upload.
+            # -------------------------------------------------
+
+            if storage_object is not None:
+                try:
+                    await (
+                        self.compensation.compensate_upload(
+                            storage_object.storage_key,
+                        )
+                    )
+
+                except Exception as compensation_error:
+                    # -------------------------------------------------
+                    # Both failures are important.
+                    #
+                    # The database failure caused the compensation,
+                    # while the compensation failure means cleanup
+                    # could not be completed.
+                    # -------------------------------------------------
+
+                    raise StorageCompensationError(
+                        storage_key=(
+                            storage_object.storage_key
+                        ),
+                        original_error=original_error,
+                        compensation_error=(
+                            compensation_error
+                        ),
+                    ) from original_error
+
+            # -------------------------------------------------
+            # No storage object existed, so there is nothing
+            # to compensate.
+            # -------------------------------------------------
+
+            raise
+
+        # =====================================================
+        # 5. Run content-processing pipeline
+        # =====================================================
+
+        try:
+            canonical_content = (
+                await self.pipeline.run(
+                    source_request,
+                )
+            )
+
+        except Exception:
+            # -------------------------------------------------
+            # The original source is intentionally retained.
+            #
+            # This allows:
+            #
+            # - retry
+            # - debugging
+            # - reprocessing
+            # - provenance
+            # - audit
+            # -------------------------------------------------
+
+            source.status = (
+                ProcessingStatus.FAILED.value
+            )
+
+            await self.session.commit()
+
+            raise
+
+        # =====================================================
+        # 6. Processing succeeded
+        # =====================================================
+
+        source.status = (
+            ProcessingStatus.COMPLETED.value
+        )
+
+        await self.session.commit()
+
+        # =====================================================
+        # 7. Return unified ingestion result
+        # =====================================================
+
+        return IngestionResult(
+            source_id=source_id,
+            canonical_content=canonical_content,
+            storage_key=(
+                storage_object.storage_key
+                if storage_object is not None
+                else None
             ),
             storage_uri=(
                 storage_object.uri
@@ -77,48 +275,6 @@ class IngestionApplicationService:
                 if storage_object is not None
                 else None
             ),
-            status="PROCESSING",
+            status=ProcessingStatus.COMPLETED,
+            metadata=request.metadata,
         )
-
-        # ---------------------------------------------------------
-        # 3. Run ingestion pipeline
-        # ---------------------------------------------------------
-        try:
-            canonical_content = await self.pipeline.run(
-                request.model_copy(
-                    update={"source_id": source_id}
-                )
-            )
-
-            source.status = "COMPLETED"
-
-            await self.session.commit()
-
-            return IngestionResult(
-                source_id=source_id,
-                canonical_content=canonical_content,
-                storage_key=(
-                    storage_object.storage_key
-                    if storage_object is not None
-                    else None
-                ),
-                storage_uri=(
-                    storage_object.uri
-                    if storage_object is not None
-                    else request.storage_uri
-                ),
-                content_hash=(
-                    storage_object.content_hash
-                    if storage_object is not None
-                    else None
-                ),
-                status="COMPLETED",
-                metadata=request.metadata,
-            )
-
-        except Exception:
-            source.status = "FAILED"
-
-            await self.session.commit()
-
-            raise

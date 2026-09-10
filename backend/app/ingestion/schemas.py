@@ -1,20 +1,24 @@
+from __future__ import annotations
+
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class InputType(StrEnum):
-    """Supported categories of source input."""
+    """Supported ingestion input types."""
 
     TEXT = "text"
     PROMPT = "prompt"
     URL = "url"
+
     PDF = "pdf"
     DOCX = "docx"
     TXT = "txt"
     MARKDOWN = "markdown"
+
     IMAGE = "image"
     AUDIO = "audio"
     VIDEO = "video"
@@ -30,7 +34,7 @@ class ProcessingStatus(StrEnum):
 
 
 class ContentBlockType(StrEnum):
-    """Types of structured content blocks."""
+    """Structural types that can appear in extracted content."""
 
     PARAGRAPH = "paragraph"
     HEADING = "heading"
@@ -44,9 +48,7 @@ class ContentBlockType(StrEnum):
 
 
 class SourceReference(BaseModel):
-    """Reference to the source being processed."""
-
-    model_config = ConfigDict(extra="forbid")
+    """Reference to the original ingested source."""
 
     source_id: UUID | None = None
     source_type: InputType
@@ -54,26 +56,36 @@ class SourceReference(BaseModel):
     filename: str | None = None
     mime_type: str | None = None
     content_hash: str | None = None
+    storage_uri: str | None = None
 
 
 class ContentBlock(BaseModel):
-    """A structured unit extracted from source content."""
-
-    model_config = ConfigDict(extra="allow")
+    """A normalized structural block extracted from a source."""
 
     block_type: ContentBlockType
-    content: str = ""
-    order: int = Field(ge=0)
-    page_number: int | None = Field(default=None, ge=1)
-    start_time: float | None = Field(default=None, ge=0)
-    end_time: float | None = Field(default=None, ge=0)
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    content: str
+    order: int
+
+    page_number: int | None = None
+
+    start_time: float | None = None
+    end_time: float | None = None
+
+    metadata: dict[str, Any] = Field(
+        default_factory=dict
+    )
 
 
 class IngestionRequest(BaseModel):
-    """Normalized request entering the ingestion pipeline."""
+    """
+    Unified input boundary for ingestion.
 
-    model_config = ConfigDict(extra="allow")
+    Small textual content may be supplied inline.
+
+    Large binary inputs should be represented through a storage
+    reference rather than placing the binary payload directly
+    inside the application request model.
+    """
 
     project_id: UUID | None = None
     source_id: UUID | None = None
@@ -84,46 +96,179 @@ class IngestionRequest(BaseModel):
     filename: str | None = None
     mime_type: str | None = None
 
-    content: str | None = None
+    # ---------------------------------------------------------
+    # Inline content
+    # ---------------------------------------------------------
+    content: str | bytes | None = None
+
+    # ---------------------------------------------------------
+    # Remote reference
+    # ---------------------------------------------------------
+    url: str | None = None
+
+    # ---------------------------------------------------------
+    # Stored binary reference
+    # ---------------------------------------------------------
+    storage_key: str | None = None
     storage_uri: str | None = None
 
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    # ---------------------------------------------------------
+    # Flexible contextual metadata
+    # ---------------------------------------------------------
+    metadata: dict[str, Any] = Field(
+        default_factory=dict
+    )
+
+    @model_validator(mode="after")
+    def validate_input_representation(
+        self,
+    ) -> "IngestionRequest":
+        """
+        Validate the relationship between input type and
+        supplied representation.
+        """
+
+        # -----------------------------------------------------
+        # Text / prompt must have inline content.
+        # -----------------------------------------------------
+        if self.input_type in {
+            InputType.TEXT,
+            InputType.PROMPT,
+        }:
+            if self.content is None:
+                raise ValueError(
+                    "Text and prompt inputs require content."
+                )
+
+            if isinstance(self.content, str):
+                if not self.content.strip():
+                    raise ValueError(
+                        "Text and prompt content "
+                        "cannot be empty."
+                    )
+
+            return self
+
+        # -----------------------------------------------------
+        # URL must have a URL.
+        # -----------------------------------------------------
+        if self.input_type == InputType.URL:
+            if not self.url:
+                raise ValueError(
+                    "URL inputs require a URL."
+                )
+
+            if not self.url.strip():
+                raise ValueError(
+                    "URL cannot be empty."
+                )
+
+            return self
+
+        # -----------------------------------------------------
+        # Binary/document/image/audio/video inputs require
+        # either a storage reference or inline bytes.
+        #
+        # We are allowing bytes here for the internal boundary,
+        # while the API layer will later enforce streaming and
+        # upload-size constraints.
+        # -----------------------------------------------------
+        binary_types = {
+            InputType.PDF,
+            InputType.DOCX,
+            InputType.TXT,
+            InputType.MARKDOWN,
+            InputType.IMAGE,
+            InputType.AUDIO,
+            InputType.VIDEO,
+        }
+
+        if self.input_type in binary_types:
+            has_inline_bytes = (
+                isinstance(self.content, bytes)
+            )
+
+            has_storage_reference = bool(
+                self.storage_key
+                or self.storage_uri
+            )
+
+            if not (
+                has_inline_bytes
+                or has_storage_reference
+            ):
+                raise ValueError(
+                    "Binary and document inputs require "
+                    "inline bytes or a storage reference."
+                )
+
+            return self
+
+        return self
 
 
 class ExtractedContent(BaseModel):
-    """Content extracted from a source before canonicalization."""
-
-    model_config = ConfigDict(extra="allow")
+    """Content extracted from a source processor."""
 
     source: SourceReference
 
-    text: str = ""
-    blocks: list[ContentBlock] = Field(default_factory=list)
+    text: str
+
+    blocks: list[ContentBlock] = Field(
+        default_factory=list
+    )
 
     language: str | None = None
+
     title: str | None = None
 
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(
+        default_factory=dict
+    )
 
 
 class CanonicalContent(BaseModel):
-    """Unified representation consumed by downstream AI systems."""
-
-    model_config = ConfigDict(extra="allow")
+    """
+    Unified semantic representation consumed by downstream
+    RAG, agents, validation, and artifact generation.
+    """
 
     source: SourceReference
 
     title: str | None = None
+
     language: str | None = None
 
-    text: str = ""
-    segments: list[ContentBlock] = Field(default_factory=list)
+    text: str
 
-    entities: list[dict[str, Any]] = Field(default_factory=list)
-    topics: list[str] = Field(default_factory=list)
-    claims: list[dict[str, Any]] = Field(default_factory=list)
-    keywords: list[str] = Field(default_factory=list)
+    segments: list[str] = Field(
+        default_factory=list
+    )
 
-    context: dict[str, Any] = Field(default_factory=dict)
-    provenance: dict[str, Any] = Field(default_factory=dict)
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    entities: list[str] = Field(
+        default_factory=list
+    )
+
+    topics: list[str] = Field(
+        default_factory=list
+    )
+
+    claims: list[str] = Field(
+        default_factory=list
+    )
+
+    keywords: list[str] = Field(
+        default_factory=list
+    )
+
+    context: dict[str, Any] = Field(
+        default_factory=dict
+    )
+
+    provenance: dict[str, Any] = Field(
+        default_factory=dict
+    )
+
+    metadata: dict[str, Any] = Field(
+        default_factory=dict
+    )

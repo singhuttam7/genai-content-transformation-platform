@@ -3,7 +3,11 @@ from uuid import uuid4
 
 from app.database.session import SessionFactory
 from app.ingestion.application_service import IngestionApplicationService
-from app.ingestion.schemas import IngestionRequest, InputType
+from app.ingestion.schemas import (
+    IngestionRequest,
+    InputType,
+    ProcessingStatus,
+)
 from app.models.project import Project
 from app.models.source import Source
 from app.models.user import User
@@ -78,7 +82,9 @@ async def test_ingestion_application() -> None:
 
         print("Application service creation: OK")
 
-        result = await service.ingest(request=request)
+        result = await service.ingest(
+            request=request,
+        )
 
         print("Source storage: OK")
         print("Source database persistence: OK")
@@ -90,11 +96,13 @@ async def test_ingestion_application() -> None:
     # 4. Validate ingestion result
     # =========================================================
     assert result is not None
+
     assert result.source_id is not None
     assert result.storage_key is not None
     assert result.storage_uri is not None
     assert result.content_hash is not None
-    assert result.status == "COMPLETED"
+
+    assert result.status == ProcessingStatus.COMPLETED
 
     storage_key = result.storage_key
 
@@ -107,21 +115,29 @@ async def test_ingestion_application() -> None:
 
     assert result.canonical_content.title == "AI Communication"
 
-    assert result.canonical_content.source.source_id == result.source_id
+    assert (
+        result.canonical_content.source.source_id
+        == result.source_id
+    )
 
     assert result.canonical_content.metadata["test"] is True
+
     assert (
         result.canonical_content.metadata["source"]
         == "integration-test"
     )
 
     assert (
-        result.canonical_content.provenance["ingestion_normalizer"]
+        result.canonical_content.provenance[
+            "ingestion_normalizer"
+        ]
         == "default"
     )
 
     assert (
-        result.canonical_content.provenance["normalization_version"]
+        result.canonical_content.provenance[
+            "normalization_version"
+        ]
         == "1.0"
     )
 
@@ -137,26 +153,50 @@ async def test_ingestion_application() -> None:
         )
 
         assert source is not None
+
         assert source.id == result.source_id
         assert source.project_id == project_id
 
-        assert source.source_type == InputType.TEXT.value
+        assert (
+            source.source_type
+            == InputType.TEXT.value
+        )
+
         assert source.title == "AI Communication"
-        assert source.original_filename == "integration-test.txt"
+
+        assert (
+            source.original_filename
+            == "integration-test.txt"
+        )
+
         assert source.mime_type == "text/plain"
 
-        assert source.status == "COMPLETED"
+        assert (
+            source.status
+            == ProcessingStatus.COMPLETED.value
+        )
 
-        assert source.content_hash == result.content_hash
-        assert source.storage_uri == result.storage_uri
+        assert (
+            source.content_hash
+            == result.content_hash
+        )
 
-        assert source.source_metadata["test"] is True
+        assert (
+            source.storage_uri
+            == result.storage_uri
+        )
+
+        assert (
+            source.source_metadata["test"]
+            is True
+        )
+
         assert (
             source.source_metadata["source"]
             == "integration-test"
         )
 
-        print("Source status COMPLETED: OK")
+        print("Source status completed: OK")
         print("Database verification: OK")
 
     # =========================================================
@@ -168,9 +208,14 @@ async def test_ingestion_application() -> None:
 
     assert exists is True
 
-    stored_content = await storage.download(storage_key)
+    stored_content = await storage.download(
+        storage_key
+    )
 
-    assert stored_content.decode("utf-8") == content
+    assert (
+        stored_content.decode("utf-8")
+        == content
+    )
 
     print("Stored source verification: OK")
 
@@ -244,8 +289,13 @@ async def test_ingestion_application() -> None:
     # Final result
     # =========================================================
     print()
-    print("Unified ingestion application: ALL TESTS PASSED")
+    print(
+        "Unified ingestion application: "
+        "ALL TESTS PASSED"
+    )
 
 
 if __name__ == "__main__":
-    asyncio.run(test_ingestion_application())
+    asyncio.run(
+        test_ingestion_application()
+    )

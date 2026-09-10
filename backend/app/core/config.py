@@ -47,6 +47,10 @@ class Settings(BaseSettings):
 
     redis_url: str = "redis://localhost:6379/0"
 
+    storage_backend: str = "local"
+    storage_root: str = "./data/storage"
+    max_upload_size_mb: int = 100
+
     # ---------------------------------------------------------
     # AI Providers
     # ---------------------------------------------------------

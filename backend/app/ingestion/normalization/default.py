@@ -41,6 +41,7 @@ class DefaultContentNormalizer:
     NON_TEXT_BLOCK_TYPES = frozenset(
         {
             ContentBlockType.IMAGE,
+             ContentBlockType.AUDIO,
         }
     )
 

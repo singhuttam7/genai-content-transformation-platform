@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.ingestion.parsers.audio import AudioDocumentProcessor
 from app.ingestion.parsers.docx import DOCXProcessor
 from app.ingestion.parsers.document import TextDocumentProcessor
 from app.ingestion.parsers.image import ImageDocumentProcessor
@@ -21,16 +22,22 @@ def create_processor_router() -> ProcessorRouter:
 
     processors = [
         TextProcessor(),
+
         TextDocumentProcessor(
             resolver=resolver,
         ),
+
         PDFProcessor(
             resolver=resolver,
         ),
+
         DOCXProcessor(
             resolver=resolver,
         ),
+
         ImageDocumentProcessor(),
+
+        AudioDocumentProcessor(),
     ]
 
     return ProcessorRouter(

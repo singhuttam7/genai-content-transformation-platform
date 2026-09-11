@@ -31,7 +31,7 @@ def test_processor_registry() -> None:
     # ---------------------------------------------------------
 
     assert not router.supports(InputType.URL)
-    assert not router.supports(InputType.AUDIO)
+    assert router.supports(InputType.AUDIO)
     assert not router.supports(InputType.VIDEO)
 
     # ---------------------------------------------------------
@@ -89,6 +89,7 @@ def test_processor_registry_supported_types() -> None:
         InputType.PDF,
         InputType.DOCX,
         InputType.IMAGE,
+        InputType.AUDIO,
     }
 
     assert supported_types == expected_types
@@ -181,4 +182,4 @@ def test_processor_registry_unsupported_input_type() -> None:
 def test_processor_registry_has_expected_count() -> None:
     router = create_processor_router()
 
-    assert len(router.supported_types) == 7
+    assert len(router.supported_types) == 8

@@ -1,5 +1,8 @@
-import asyncio
-from uuid import uuid4
+from __future__ import annotations
+
+from uuid import UUID, uuid4
+
+import pytest
 
 from app.database.session import SessionFactory
 from app.ingestion.application_service import (
@@ -29,7 +32,7 @@ from app.storage.errors import (
 # ============================================================
 
 
-async def create_test_project() -> tuple:
+async def create_test_project() -> tuple[UUID, UUID]:
     """Create a temporary user and project."""
 
     async with SessionFactory() as session:
@@ -40,7 +43,6 @@ async def create_test_project() -> tuple:
         )
 
         session.add(user)
-
         await session.flush()
 
         project = Project(
@@ -52,15 +54,14 @@ async def create_test_project() -> tuple:
         )
 
         session.add(project)
-
         await session.commit()
 
         return user.id, project.id
 
 
 async def cleanup_test_project(
-    user_id,
-    project_id,
+    user_id: UUID,
+    project_id: UUID,
 ) -> None:
     """Remove temporary user and project."""
 
@@ -84,7 +85,9 @@ async def cleanup_test_project(
         await session.commit()
 
 
-async def get_source(source_id):
+async def get_source(
+    source_id: UUID,
+) -> Source | None:
     """Retrieve a source using a fresh session."""
 
     async with SessionFactory() as session:
@@ -95,8 +98,8 @@ async def get_source(source_id):
 
 
 def create_request(
-    project_id,
-    source_id=None,
+    project_id: UUID,
+    source_id: UUID | None = None,
 ) -> IngestionRequest:
     """Create a standard text ingestion request."""
 
@@ -119,7 +122,7 @@ def create_request(
 
 
 # ============================================================
-# Test 1 — Storage Upload Failure
+# Test Doubles
 # ============================================================
 
 
@@ -130,55 +133,6 @@ class FailingStorageService:
         raise RuntimeError(
             "Simulated storage upload failure"
         )
-
-
-async def test_storage_upload_failure() -> None:
-    """Verify DB is not touched when storage fails."""
-
-    user_id, project_id = (
-        await create_test_project()
-    )
-
-    request = create_request(
-        project_id=project_id,
-    )
-
-    service = IngestionApplicationService(
-        session=None,
-        storage=FailingStorageService(),
-    )
-
-    try:
-        await service.ingest(
-            request=request,
-        )
-
-        raise AssertionError(
-            "Expected storage failure "
-            "was not raised."
-        )
-
-    except RuntimeError as exc:
-        assert (
-            str(exc)
-            == "Simulated storage upload failure"
-        )
-
-    assert request.source_id is None
-
-    await cleanup_test_project(
-        user_id,
-        project_id,
-    )
-
-    print(
-        "Storage upload failure handling: OK"
-    )
-
-
-# ============================================================
-# Test 2 — Database Persistence Failure
-# ============================================================
 
 
 class FailingSourcePersistenceService:
@@ -211,19 +165,100 @@ class TrackingCompensationService(
         storage_key: str,
     ) -> None:
         self.compensation_called = True
-
-        self.compensated_storage_key = (
-            storage_key
-        )
+        self.compensated_storage_key = storage_key
 
         await super().compensate_upload(
             storage_key,
         )
 
 
+class FailingPipeline:
+    """Pipeline that always fails."""
+
+    async def run(
+        self,
+        request: IngestionRequest,
+    ):
+        raise RuntimeError(
+            "Simulated pipeline processing failure"
+        )
+
+
+class FailingCompensationService:
+    """Compensation service that intentionally fails."""
+
+    def __init__(self) -> None:
+        self.storage_key: str | None = None
+
+    async def compensate_upload(
+        self,
+        storage_key: str,
+    ) -> None:
+        self.storage_key = storage_key
+
+        raise RuntimeError(
+            "Simulated compensation failure"
+        )
+
+
+# ============================================================
+# Test 1 — Storage Upload Failure
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_storage_upload_failure() -> None:
+    """
+    Verify that database persistence is not attempted
+    when source storage fails.
+    """
+
+    user_id, project_id = (
+        await create_test_project()
+    )
+
+    try:
+        request = create_request(
+            project_id=project_id,
+        )
+
+        service = IngestionApplicationService(
+            session=None,
+            storage=FailingStorageService(),
+        )
+
+        with pytest.raises(
+            RuntimeError,
+            match="Simulated storage upload failure",
+        ):
+            await service.ingest(
+                request=request,
+            )
+
+        assert request.source_id is None
+
+        # The application service should fail before
+        # generating/persisting a source record.
+        assert await get_source(
+            request.source_id
+        ) is None if request.source_id else True
+
+    finally:
+        await cleanup_test_project(
+            user_id,
+            project_id,
+        )
+
+
+# ============================================================
+# Test 2 — Database Persistence Failure
+# ============================================================
+
+
+@pytest.mark.asyncio
 async def test_database_persistence_failure() -> None:
     """
-    Verify storage compensation after DB failure.
+    Verify storage compensation after database failure.
     """
 
     storage = get_storage_service()
@@ -232,74 +267,55 @@ async def test_database_persistence_failure() -> None:
         await create_test_project()
     )
 
-    request = create_request(
-        project_id=project_id,
-    )
-
-    compensation = (
-        TrackingCompensationService(
-            storage_service=storage,
-        )
-    )
-
-    async with SessionFactory() as session:
-        service = IngestionApplicationService(
-            session=session,
-            storage=storage,
-            compensation=compensation,
+    try:
+        request = create_request(
+            project_id=project_id,
         )
 
-        service.source_service = (
-            FailingSourcePersistenceService()
+        compensation = (
+            TrackingCompensationService(
+                storage_service=storage,
+            )
         )
 
-        try:
-            await service.ingest(
-                request=request,
+        async with SessionFactory() as session:
+            service = IngestionApplicationService(
+                session=session,
+                storage=storage,
+                compensation=compensation,
             )
 
-            raise AssertionError(
-                "Expected database persistence "
-                "failure was not raised."
+            service.source_service = (
+                FailingSourcePersistenceService()
             )
 
-        except RuntimeError as exc:
-            assert (
-                str(exc)
-                == "Simulated database "
-                "persistence failure"
-            )
+            with pytest.raises(
+                RuntimeError,
+                match="Simulated database persistence failure",
+            ):
+                await service.ingest(
+                    request=request,
+                )
 
-    assert (
-        compensation.compensation_called
-        is True
-    )
+        assert (
+            compensation.compensation_called
+            is True
+        )
 
-    assert (
-        compensation.compensated_storage_key
-        is not None
-    )
+        assert (
+            compensation.compensated_storage_key
+            is not None
+        )
 
-    assert not await storage.exists(
-        compensation.compensated_storage_key
-    )
+        assert not await storage.exists(
+            compensation.compensated_storage_key
+        )
 
-    await cleanup_test_project(
-        user_id,
-        project_id,
-    )
-
-    print(
-        "Database persistence failure handling: OK"
-    )
-
-    print(
-        "Storage compensation execution: OK"
-    )
-
-    print(
-        "Orphan storage prevention: OK"
-    )
+    finally:
+        await cleanup_test_project(
+            user_id,
+            project_id,
+        )
 
 
 # ============================================================
@@ -307,21 +323,13 @@ async def test_database_persistence_failure() -> None:
 # ============================================================
 
 
-class FailingPipeline:
-    """Pipeline that always fails."""
-
-    async def run(self, request):
-        raise RuntimeError(
-            "Simulated pipeline processing failure"
-        )
-
-
+@pytest.mark.asyncio
 async def test_pipeline_failure_source_retained() -> None:
     """
     Verify:
 
     - Source becomes FAILED.
-    - Source remains in database.
+    - Source remains in the database.
     - Original source file remains available.
     """
 
@@ -338,136 +346,89 @@ async def test_pipeline_failure_source_retained() -> None:
         source_id=source_id,
     )
 
-    async with SessionFactory() as session:
-        service = IngestionApplicationService(
-            session=session,
-            storage=storage,
-        )
+    storage_key = None
 
-        service.pipeline = FailingPipeline()
-
-        try:
-            await service.ingest(
-                request=request,
+    try:
+        async with SessionFactory() as session:
+            service = IngestionApplicationService(
+                session=session,
+                storage=storage,
             )
 
-            raise AssertionError(
-                "Expected pipeline failure "
-                "was not raised."
-            )
+            service.pipeline = FailingPipeline()
 
-        except RuntimeError as exc:
-            assert (
-                str(exc)
-                == "Simulated pipeline "
-                "processing failure"
-            )
+            with pytest.raises(
+                RuntimeError,
+                match="Simulated pipeline processing failure",
+            ):
+                await service.ingest(
+                    request=request,
+                )
 
-    source = await get_source(
-        source_id,
-    )
-
-    assert source is not None
-
-    assert (
-        source.status
-        == ProcessingStatus.FAILED.value
-    )
-
-    assert source.storage_uri is not None
-
-    print(
-        "Pipeline failure status FAILED: OK"
-    )
-
-    print(
-        "Source database record retained: OK"
-    )
-
-    # --------------------------------------------------------
-    # Verify original file
-    # --------------------------------------------------------
-
-    from pathlib import Path
-
-    storage_root = Path(
-        "./data/storage/source_file"
-    )
-
-    source_directory = (
-        storage_root / str(source_id)
-    )
-
-    assert source_directory.exists()
-
-    matching_files = [
-        path
-        for path in source_directory.iterdir()
-        if path.is_file()
-    ]
-
-    assert len(matching_files) == 1
-
-    retained_file = matching_files[0]
-
-    assert retained_file.exists()
-
-    assert (
-        retained_file.read_text(
-            encoding="utf-8"
-        )
-        == request.content
-    )
-
-    print(
-        "Original source retention: OK"
-    )
-
-    # --------------------------------------------------------
-    # Cleanup retained source
-    # --------------------------------------------------------
-
-    storage_key = (
-        f"source_file/"
-        f"{source_id}/"
-        f"{retained_file.name}"
-    )
-
-    await storage.delete(
-        storage_key,
-    )
-
-    assert not await storage.exists(
-        storage_key,
-    )
-
-    print(
-        "Failed-source storage cleanup: OK"
-    )
-
-    # --------------------------------------------------------
-    # Cleanup DB
-    # --------------------------------------------------------
-
-    async with SessionFactory() as session:
-        source = await session.get(
-            Source,
+        source = await get_source(
             source_id,
         )
 
-        if source is not None:
-            await session.delete(source)
+        assert source is not None
 
-        await session.commit()
+        assert (
+            source.status
+            == ProcessingStatus.FAILED.value
+        )
 
-    await cleanup_test_project(
-        user_id,
-        project_id,
-    )
+        assert source.storage_uri is not None
 
-    print(
-        "Pipeline failure cleanup: OK"
-    )
+        # ----------------------------------------------------
+        # Verify original source remains in storage
+        # ----------------------------------------------------
+
+        storage_key = (
+            f"source_file/"
+            f"{source_id}/"
+            f"{request.filename}"
+        )
+
+        assert await storage.exists(
+            storage_key
+        )
+
+        stored_content = await storage.download(
+            storage_key
+        )
+
+        assert (
+            stored_content.decode("utf-8")
+            == request.content
+        )
+
+    finally:
+        # ----------------------------------------------------
+        # Cleanup source file
+        # ----------------------------------------------------
+
+        if storage_key is not None:
+            if await storage.exists(storage_key):
+                await storage.delete(storage_key)
+
+        # ----------------------------------------------------
+        # Cleanup source record
+        # ----------------------------------------------------
+
+        async with SessionFactory() as session:
+            source = await session.get(
+                Source,
+                source_id,
+            )
+
+            if source is not None:
+                await session.delete(source)
+
+            await session.commit()
+
+        await cleanup_test_project(
+            user_id,
+            project_id,
+        )
 
 
 # ============================================================
@@ -475,26 +436,10 @@ async def test_pipeline_failure_source_retained() -> None:
 # ============================================================
 
 
-class FailingCompensationService:
-    """Compensation service that intentionally fails."""
-
-    def __init__(self):
-        self.storage_key = None
-
-    async def compensate_upload(
-        self,
-        storage_key: str,
-    ) -> None:
-        self.storage_key = storage_key
-
-        raise RuntimeError(
-            "Simulated compensation failure"
-        )
-
-
+@pytest.mark.asyncio
 async def test_compensation_failure() -> None:
     """
-    Verify that both the original database error and the
+    Verify that both the original database error and
     compensation failure are preserved.
     """
 
@@ -512,143 +457,81 @@ async def test_compensation_failure() -> None:
         FailingCompensationService()
     )
 
-    async with SessionFactory() as session:
-        service = IngestionApplicationService(
-            session=session,
-            storage=storage,
-            compensation=compensation,
+    try:
+        async with SessionFactory() as session:
+            service = IngestionApplicationService(
+                session=session,
+                storage=storage,
+                compensation=compensation,
+            )
+
+            service.source_service = (
+                FailingSourcePersistenceService()
+            )
+
+            with pytest.raises(
+                StorageCompensationError
+            ) as exc_info:
+                await service.ingest(
+                    request=request,
+                )
+
+        error = exc_info.value
+
+        # ----------------------------------------------------
+        # Storage key
+        # ----------------------------------------------------
+
+        assert error.storage_key is not None
+
+        assert (
+            error.storage_key
+            == compensation.storage_key
         )
 
-        service.source_service = (
-            FailingSourcePersistenceService()
+        # ----------------------------------------------------
+        # Original database error
+        # ----------------------------------------------------
+
+        assert isinstance(
+            error.original_error,
+            RuntimeError,
         )
 
-        try:
-            await service.ingest(
-                request=request,
-            )
+        assert (
+            str(error.original_error)
+            == "Simulated database persistence failure"
+        )
 
-            raise AssertionError(
-                "Expected compensation failure "
-                "was not raised."
-            )
+        # ----------------------------------------------------
+        # Compensation error
+        # ----------------------------------------------------
 
-        except StorageCompensationError as exc:
+        assert isinstance(
+            error.compensation_error,
+            RuntimeError,
+        )
 
-            # ------------------------------------------------
-            # Verify storage key was preserved.
-            # ------------------------------------------------
+        assert (
+            str(error.compensation_error)
+            == "Simulated compensation failure"
+        )
 
-            assert exc.storage_key is not None
+    finally:
+        # ----------------------------------------------------
+        # Compensation intentionally failed, so the uploaded
+        # source file may still exist. Clean it up manually.
+        # ----------------------------------------------------
 
-            assert (
-                exc.storage_key
-                == compensation.storage_key
-            )
-
-            # ------------------------------------------------
-            # Verify original DB error.
-            # ------------------------------------------------
-
-            assert isinstance(
-                exc.original_error,
-                RuntimeError,
-            )
-
-            assert (
-                str(exc.original_error)
-                == "Simulated database "
-                "persistence failure"
-            )
-
-            # ------------------------------------------------
-            # Verify compensation error.
-            # ------------------------------------------------
-
-            assert isinstance(
-                exc.compensation_error,
-                RuntimeError,
-            )
-
-            assert (
-                str(exc.compensation_error)
-                == "Simulated compensation failure"
-            )
-
-    # --------------------------------------------------------
-    # The failed compensation means the source file may still
-    # exist. Clean it up manually for this test.
-    # --------------------------------------------------------
-
-    if compensation.storage_key is not None:
-        if await storage.exists(
-            compensation.storage_key
-        ):
-            await storage.delete(
+        if compensation.storage_key is not None:
+            if await storage.exists(
                 compensation.storage_key
-            )
+            ):
+                await storage.delete(
+                    compensation.storage_key
+                )
 
-    await cleanup_test_project(
-        user_id,
-        project_id,
-    )
-
-    print(
-        "Compensation failure detection: OK"
-    )
-
-    print(
-        "Original database error preservation: OK"
-    )
-
-    print(
-        "Compensation error preservation: OK"
-    )
-
-    print(
-        "Compensation storage-key preservation: OK"
-    )
-
-
-# ============================================================
-# Main Test Runner
-# ============================================================
-
-
-async def main() -> None:
-    print()
-    print(
-        "=================================================="
-    )
-    print(
-        "INGESTION FAILURE-PATH TESTS"
-    )
-    print(
-        "=================================================="
-    )
-    print()
-
-    await test_storage_upload_failure()
-
-    await test_database_persistence_failure()
-
-    await test_pipeline_failure_source_retained()
-
-    await test_compensation_failure()
-
-    print()
-    print(
-        "=================================================="
-    )
-    print(
-        "FAILURE-PATH TESTS: ALL PASSED"
-    )
-    print(
-        "=================================================="
-    )
-
-
-if __name__ == "__main__":
-    asyncio.run(
-        main()
-    )
+        await cleanup_test_project(
+            user_id,
+            project_id,
+        )

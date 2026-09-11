@@ -51,24 +51,39 @@ class SourceReference(BaseModel):
     """Reference to the original ingested source."""
 
     source_id: UUID | None = None
+
     source_type: InputType
+
     title: str | None = None
+
     filename: str | None = None
+
     mime_type: str | None = None
+
     content_hash: str | None = None
+
     storage_uri: str | None = None
 
 
 class ContentBlock(BaseModel):
-    """A normalized structural block extracted from a source."""
+    """
+    A normalized structural block extracted from a source.
+
+    Content blocks preserve structural and positional information
+    so downstream components do not need to reconstruct the
+    original document structure.
+    """
 
     block_type: ContentBlockType
+
     content: str
+
     order: int
 
     page_number: int | None = None
 
     start_time: float | None = None
+
     end_time: float | None = None
 
     metadata: dict[str, Any] = Field(
@@ -88,33 +103,41 @@ class IngestionRequest(BaseModel):
     """
 
     project_id: UUID | None = None
+
     source_id: UUID | None = None
 
     input_type: InputType
 
     title: str | None = None
+
     filename: str | None = None
+
     mime_type: str | None = None
 
     # ---------------------------------------------------------
     # Inline content
     # ---------------------------------------------------------
+
     content: str | bytes | None = None
 
     # ---------------------------------------------------------
     # Remote reference
     # ---------------------------------------------------------
+
     url: str | None = None
 
     # ---------------------------------------------------------
     # Stored binary reference
     # ---------------------------------------------------------
+
     storage_key: str | None = None
+
     storage_uri: str | None = None
 
     # ---------------------------------------------------------
     # Flexible contextual metadata
     # ---------------------------------------------------------
+
     metadata: dict[str, Any] = Field(
         default_factory=dict
     )
@@ -131,6 +154,7 @@ class IngestionRequest(BaseModel):
         # -----------------------------------------------------
         # Text / prompt must have inline content.
         # -----------------------------------------------------
+
         if self.input_type in {
             InputType.TEXT,
             InputType.PROMPT,
@@ -152,6 +176,7 @@ class IngestionRequest(BaseModel):
         # -----------------------------------------------------
         # URL must have a URL.
         # -----------------------------------------------------
+
         if self.input_type == InputType.URL:
             if not self.url:
                 raise ValueError(
@@ -169,10 +194,11 @@ class IngestionRequest(BaseModel):
         # Binary/document/image/audio/video inputs require
         # either a storage reference or inline bytes.
         #
-        # We are allowing bytes here for the internal boundary,
-        # while the API layer will later enforce streaming and
+        # We allow bytes at the internal ingestion boundary.
+        # The API layer will later enforce streaming and
         # upload-size constraints.
         # -----------------------------------------------------
+
         binary_types = {
             InputType.PDF,
             InputType.DOCX,
@@ -184,8 +210,9 @@ class IngestionRequest(BaseModel):
         }
 
         if self.input_type in binary_types:
-            has_inline_bytes = (
-                isinstance(self.content, bytes)
+            has_inline_bytes = isinstance(
+                self.content,
+                bytes,
             )
 
             has_storage_reference = bool(
@@ -208,7 +235,12 @@ class IngestionRequest(BaseModel):
 
 
 class ExtractedContent(BaseModel):
-    """Content extracted from a source processor."""
+    """
+    Content extracted from a source processor.
+
+    The processor layer is responsible for extraction.
+    Structural blocks retain document-level information.
+    """
 
     source: SourceReference
 
@@ -231,6 +263,10 @@ class CanonicalContent(BaseModel):
     """
     Unified semantic representation consumed by downstream
     RAG, agents, validation, and artifact generation.
+
+    The canonical representation deliberately preserves
+    structural ContentBlock objects instead of flattening
+    them into plain strings.
     """
 
     source: SourceReference
@@ -241,9 +277,29 @@ class CanonicalContent(BaseModel):
 
     text: str
 
-    segments: list[str] = Field(
+    # ---------------------------------------------------------
+    # Structured canonical segments
+    # ---------------------------------------------------------
+    #
+    # Each segment retains:
+    # - block type
+    # - normalized content
+    # - deterministic order
+    # - page number
+    # - timestamps
+    # - metadata
+    #
+    # This is important for PDF, DOCX, image, audio and video
+    # ingestion as well as downstream RAG and provenance.
+    # ---------------------------------------------------------
+
+    segments: list[ContentBlock] = Field(
         default_factory=list
     )
+
+    # ---------------------------------------------------------
+    # Semantic fields
+    # ---------------------------------------------------------
 
     entities: list[str] = Field(
         default_factory=list
@@ -261,13 +317,25 @@ class CanonicalContent(BaseModel):
         default_factory=list
     )
 
+    # ---------------------------------------------------------
+    # Flexible semantic/contextual information
+    # ---------------------------------------------------------
+
     context: dict[str, Any] = Field(
         default_factory=dict
     )
 
+    # ---------------------------------------------------------
+    # Provenance
+    # ---------------------------------------------------------
+
     provenance: dict[str, Any] = Field(
         default_factory=dict
     )
+
+    # ---------------------------------------------------------
+    # Additional metadata
+    # ---------------------------------------------------------
 
     metadata: dict[str, Any] = Field(
         default_factory=dict

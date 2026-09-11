@@ -1,5 +1,8 @@
-import asyncio
+from __future__ import annotations
+
 from uuid import uuid4
+
+import pytest
 
 from app.database.session import SessionFactory
 from app.ingestion.application_service import IngestionApplicationService
@@ -14,6 +17,7 @@ from app.models.user import User
 from app.storage.dependencies import get_storage_service
 
 
+@pytest.mark.asyncio
 async def test_ingestion_application() -> None:
     storage = get_storage_service()
 
@@ -47,9 +51,6 @@ async def test_ingestion_application() -> None:
         user_id = user.id
         project_id = project.id
 
-    print("User creation: OK")
-    print("Project creation: OK")
-
     # =========================================================
     # 2. Prepare ingestion request
     # =========================================================
@@ -80,17 +81,9 @@ async def test_ingestion_application() -> None:
             storage=storage,
         )
 
-        print("Application service creation: OK")
-
         result = await service.ingest(
             request=request,
         )
-
-        print("Source storage: OK")
-        print("Source database persistence: OK")
-        print("Content processing: OK")
-        print("Canonical content generation: OK")
-        print("Source hash generation: OK")
 
     # =========================================================
     # 4. Validate ingestion result
@@ -140,8 +133,6 @@ async def test_ingestion_application() -> None:
         ]
         == "1.0"
     )
-
-    print("Ingestion result validation: OK")
 
     # =========================================================
     # 5. Verify database persistence using a fresh session
@@ -196,9 +187,6 @@ async def test_ingestion_application() -> None:
             == "integration-test"
         )
 
-        print("Source status completed: OK")
-        print("Database verification: OK")
-
     # =========================================================
     # 6. Verify stored source file
     # =========================================================
@@ -217,16 +205,12 @@ async def test_ingestion_application() -> None:
         == content
     )
 
-    print("Stored source verification: OK")
-
     # =========================================================
     # 7. Cleanup storage
     # =========================================================
     await storage.delete(storage_key)
 
     assert not await storage.exists(storage_key)
-
-    print("Storage cleanup: OK")
 
     # =========================================================
     # 8. Cleanup database
@@ -258,8 +242,6 @@ async def test_ingestion_application() -> None:
 
         await cleanup_session.commit()
 
-    print("Database cleanup: OK")
-
     # =========================================================
     # 9. Verify database cleanup
     # =========================================================
@@ -282,20 +264,3 @@ async def test_ingestion_application() -> None:
         assert source is None
         assert project is None
         assert user is None
-
-    print("Cleanup verification: OK")
-
-    # =========================================================
-    # Final result
-    # =========================================================
-    print()
-    print(
-        "Unified ingestion application: "
-        "ALL TESTS PASSED"
-    )
-
-
-if __name__ == "__main__":
-    asyncio.run(
-        test_ingestion_application()
-    )

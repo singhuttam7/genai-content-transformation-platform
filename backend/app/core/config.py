@@ -47,6 +47,10 @@ class Settings(BaseSettings):
 
     redis_url: str = "redis://localhost:6379/0"
 
+    # ---------------------------------------------------------
+    # Storage
+    # ---------------------------------------------------------
+
     storage_backend: str = "local"
     storage_root: str = "./data/storage"
     max_upload_size_mb: int = 100
@@ -73,6 +77,19 @@ class Settings(BaseSettings):
     secret_key: str = "change-this-development-secret"
     access_token_expire_minutes: int = 30
 
+    # ---------------------------------------------------------
+    # URL Ingestion / Outbound HTTP
+    # ---------------------------------------------------------
+
+    url_fetch_timeout_seconds: float = 15.0
+    url_max_response_size_mb: int = 10
+    url_max_redirects: int = 5
+
+    url_allowed_content_types: tuple[str, ...] = (
+        "text/html",
+        "application/xhtml+xml",
+    )
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -86,6 +103,7 @@ def get_settings() -> Settings:
     """
     Return a cached application settings instance.
     """
+
     return Settings()
 
 

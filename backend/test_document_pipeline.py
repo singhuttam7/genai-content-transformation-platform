@@ -1,4 +1,6 @@
-import asyncio
+from __future__ import annotations
+
+import pytest
 
 from app.ingestion.factory import create_ingestion_pipeline
 from app.ingestion.schemas import (
@@ -8,6 +10,7 @@ from app.ingestion.schemas import (
 )
 
 
+@pytest.mark.asyncio
 async def test_txt_pipeline() -> None:
     pipeline = create_ingestion_pipeline()
 
@@ -34,21 +37,39 @@ async def test_txt_pipeline() -> None:
 
     assert len(result.segments) == 2
 
-    assert result.segments[0] == (
-        "Artificial intelligence is transforming communication."
+    # Canonical segments preserve structural information.
+    assert (
+        result.segments[0].content
+        == "Artificial intelligence is transforming communication."
     )
 
-    assert result.segments[1] == (
-        "This content passed through the complete ingestion pipeline."
+    assert (
+        result.segments[0].block_type
+        == ContentBlockType.PARAGRAPH
     )
+
+    assert result.segments[0].order == 0
+
+    assert (
+        result.segments[1].content
+        == "This content passed through the complete ingestion pipeline."
+    )
+
+    assert (
+        result.segments[1].block_type
+        == ContentBlockType.PARAGRAPH
+    )
+
+    assert result.segments[1].order == 1
 
     assert result.source.source_type == InputType.TXT
+
     assert len(result.provenance) > 0
+
     assert result.metadata["test"] is True
 
-    print("TXT complete pipeline: OK")
 
-
+@pytest.mark.asyncio
 async def test_markdown_pipeline() -> None:
     pipeline = create_ingestion_pipeline()
 
@@ -79,21 +100,46 @@ async def test_markdown_pipeline() -> None:
 
     assert len(result.segments) == 4
 
-    assert result.segments[0] == "Security Advisory"
-    assert result.segments[1] == (
-        "This advisory contains important guidance."
+    assert result.segments[0].content == "Security Advisory"
+    assert (
+        result.segments[0].block_type
+        == ContentBlockType.HEADING
     )
-    assert result.segments[2] == "Recommended Actions"
-    assert result.segments[3] == (
-        "Update affected systems immediately."
+    assert result.segments[0].order == 0
+
+    assert (
+        result.segments[1].content
+        == "This advisory contains important guidance."
     )
+    assert (
+        result.segments[1].block_type
+        == ContentBlockType.PARAGRAPH
+    )
+    assert result.segments[1].order == 1
+
+    assert result.segments[2].content == "Recommended Actions"
+    assert (
+        result.segments[2].block_type
+        == ContentBlockType.HEADING
+    )
+    assert result.segments[2].order == 2
+
+    assert (
+        result.segments[3].content
+        == "Update affected systems immediately."
+    )
+    assert (
+        result.segments[3].block_type
+        == ContentBlockType.PARAGRAPH
+    )
+    assert result.segments[3].order == 3
 
     assert result.source.source_type == InputType.MARKDOWN
+
     assert result.metadata["format"] == "markdown"
 
-    print("Markdown complete pipeline: OK")
 
-
+@pytest.mark.asyncio
 async def test_pipeline_preserves_structure() -> None:
     pipeline = create_ingestion_pipeline()
 
@@ -111,35 +157,35 @@ async def test_pipeline_preserves_structure() -> None:
 
     result = await pipeline.run(request)
 
-    # CanonicalContent contains semantic-ready strings,
-    # while structural block information remains available
-    # through the extraction stage.
+    # CanonicalContent intentionally preserves structural
+    # ContentBlock information.
     assert len(result.segments) == 4
 
-    assert result.segments[0] == "Main Heading"
-    assert result.segments[1] == "First paragraph."
-    assert result.segments[2] == "Sub Heading"
-    assert result.segments[3] == "Second paragraph."
+    assert result.segments[0].content == "Main Heading"
+    assert (
+        result.segments[0].block_type
+        == ContentBlockType.HEADING
+    )
 
-    print("Pipeline structure preservation: OK")
+    assert result.segments[1].content == "First paragraph."
+    assert (
+        result.segments[1].block_type
+        == ContentBlockType.PARAGRAPH
+    )
 
+    assert result.segments[2].content == "Sub Heading"
+    assert (
+        result.segments[2].block_type
+        == ContentBlockType.HEADING
+    )
 
-async def main() -> None:
-    print()
-    print("==============================================")
-    print("DOCUMENT PIPELINE INTEGRATION TESTS")
-    print("==============================================")
-    print()
+    assert result.segments[3].content == "Second paragraph."
+    assert (
+        result.segments[3].block_type
+        == ContentBlockType.PARAGRAPH
+    )
 
-    await test_txt_pipeline()
-    await test_markdown_pipeline()
-    await test_pipeline_preserves_structure()
-
-    print()
-    print("==============================================")
-    print("DOCUMENT PIPELINE: ALL TESTS PASSED")
-    print("==============================================")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    assert [
+        segment.order
+        for segment in result.segments
+    ] == [0, 1, 2, 3]

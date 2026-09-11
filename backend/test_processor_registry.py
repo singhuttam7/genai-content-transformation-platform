@@ -4,6 +4,7 @@ import pytest
 
 from app.ingestion.parsers.docx import DOCXProcessor
 from app.ingestion.parsers.document import TextDocumentProcessor
+from app.ingestion.parsers.image import ImageDocumentProcessor
 from app.ingestion.parsers.pdf import PDFProcessor
 from app.ingestion.parsers.text import TextProcessor
 from app.ingestion.registry import create_processor_router
@@ -23,13 +24,13 @@ def test_processor_registry() -> None:
     assert router.supports(InputType.MARKDOWN)
     assert router.supports(InputType.PDF)
     assert router.supports(InputType.DOCX)
+    assert router.supports(InputType.IMAGE)
 
     # ---------------------------------------------------------
     # Unsupported input types
     # ---------------------------------------------------------
 
     assert not router.supports(InputType.URL)
-    assert not router.supports(InputType.IMAGE)
     assert not router.supports(InputType.AUDIO)
     assert not router.supports(InputType.VIDEO)
 
@@ -67,6 +68,11 @@ def test_processor_registry() -> None:
         DOCXProcessor,
     )
 
+    assert isinstance(
+        router.get_processor(InputType.IMAGE),
+        ImageDocumentProcessor,
+    )
+
 
 def test_processor_registry_supported_types() -> None:
     router = create_processor_router()
@@ -82,6 +88,7 @@ def test_processor_registry_supported_types() -> None:
         InputType.MARKDOWN,
         InputType.PDF,
         InputType.DOCX,
+        InputType.IMAGE,
     }
 
     assert supported_types == expected_types
@@ -114,12 +121,26 @@ def test_processor_registry_processor_instances() -> None:
         InputType.DOCX
     )
 
+    image_processor = router.get_processor(
+        InputType.IMAGE
+    )
+
+    # ---------------------------------------------------------
     # TEXT and PROMPT intentionally share TextProcessor.
+    # ---------------------------------------------------------
+
     assert text_processor is prompt_processor
 
+    # ---------------------------------------------------------
     # TXT and Markdown intentionally share the same
     # document processor.
+    # ---------------------------------------------------------
+
     assert txt_processor is markdown_processor
+
+    # ---------------------------------------------------------
+    # Processor types
+    # ---------------------------------------------------------
 
     assert isinstance(
         text_processor,
@@ -141,6 +162,11 @@ def test_processor_registry_processor_instances() -> None:
         DOCXProcessor,
     )
 
+    assert isinstance(
+        image_processor,
+        ImageDocumentProcessor,
+    )
+
 
 def test_processor_registry_unsupported_input_type() -> None:
     router = create_processor_router()
@@ -155,4 +181,4 @@ def test_processor_registry_unsupported_input_type() -> None:
 def test_processor_registry_has_expected_count() -> None:
     router = create_processor_router()
 
-    assert len(router.supported_types) == 6
+    assert len(router.supported_types) == 7

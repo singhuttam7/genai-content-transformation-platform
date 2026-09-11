@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.ingestion.parsers.docx import DOCXProcessor
 from app.ingestion.parsers.document import TextDocumentProcessor
+from app.ingestion.parsers.image import ImageDocumentProcessor
 from app.ingestion.parsers.pdf import PDFProcessor
 from app.ingestion.parsers.text import TextProcessor
 from app.ingestion.router import ProcessorRouter
@@ -29,6 +30,7 @@ def create_processor_router() -> ProcessorRouter:
         DOCXProcessor(
             resolver=resolver,
         ),
+        ImageDocumentProcessor(),
     ]
 
     return ProcessorRouter(

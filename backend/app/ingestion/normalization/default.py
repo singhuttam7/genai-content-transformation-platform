@@ -5,6 +5,7 @@ import re
 from app.ingestion.schemas import (
     CanonicalContent,
     ContentBlock,
+    ContentBlockType,
     ExtractedContent,
 )
 
@@ -28,6 +29,20 @@ class DefaultContentNormalizer:
     """
 
     VERSION = "1.0"
+
+    # ---------------------------------------------------------
+    # Structural blocks that are valid even when they do not
+    # contain textual content.
+    #
+    # These represent source-level multimodal content rather
+    # than text-bearing content.
+    # ---------------------------------------------------------
+
+    NON_TEXT_BLOCK_TYPES = frozenset(
+        {
+            ContentBlockType.IMAGE,
+        }
+    )
 
     async def normalize(
         self,
@@ -56,18 +71,6 @@ class DefaultContentNormalizer:
 
         # =====================================================
         # 3. Preserve structured blocks as canonical segments
-        # =====================================================
-        #
-        # CanonicalContent.segments is:
-        #
-        #     list[ContentBlock]
-        #
-        # We deliberately preserve structural information such
-        # as block type, ordering, page number, timestamps and
-        # metadata.
-        #
-        # Downstream RAG/chunking components can later transform
-        # these structured blocks into embedding-ready chunks.
         # =====================================================
 
         segments = normalized_blocks
@@ -122,8 +125,6 @@ class DefaultContentNormalizer:
           entire document.
         - Remove trailing whitespace from the end of the
           entire document.
-        - Preserve leading whitespace on internal non-empty
-          lines.
         """
 
         if not text:
@@ -248,6 +249,9 @@ class DefaultContentNormalizer:
 
         When exactly one block represents the complete source,
         its normalized content is aligned with normalized_text.
+
+        Non-text structural blocks such as IMAGE are preserved
+        even when their textual content is empty.
         """
 
         normalized: list[ContentBlock] = []
@@ -280,11 +284,17 @@ class DefaultContentNormalizer:
             #     CanonicalContent.segments[0].content
             #
             # consistent for TEXT/PROMPT inputs.
+            #
+            # Do not apply this rule to non-text blocks because
+            # their source representation may legitimately have
+            # empty textual content.
             # -------------------------------------------------
 
             if (
                 normalized_text is not None
                 and len(sorted_blocks) == 1
+                and block.block_type
+                not in cls.NON_TEXT_BLOCK_TYPES
             ):
                 normalized_content = normalized_text
 
@@ -296,10 +306,19 @@ class DefaultContentNormalizer:
                 )
 
             # -------------------------------------------------
-            # Ignore empty blocks.
+            # Ignore empty text-bearing blocks.
+            #
+            # Non-text structural blocks such as IMAGE are
+            # preserved because their metadata can represent
+            # meaningful source information even without OCR
+            # or vision processing.
             # -------------------------------------------------
 
-            if not normalized_content:
+            if (
+                not normalized_content
+                and block.block_type
+                not in cls.NON_TEXT_BLOCK_TYPES
+            ):
                 continue
 
             normalized.append(

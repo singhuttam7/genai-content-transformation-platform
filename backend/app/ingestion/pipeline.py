@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.ingestion.detector import InputDetector
+from app.ingestion.enrichment import ContentEnrichmentService
 from app.ingestion.normalizer import ContentNormalizer
 from app.ingestion.router import ProcessorRouter
 from app.ingestion.schemas import (
@@ -10,7 +11,8 @@ from app.ingestion.schemas import (
 
 
 class IngestionPipeline:
-    """Orchestrates the content understanding pipeline.
+    """
+    Orchestrates the content understanding pipeline.
 
     Pipeline:
 
@@ -22,6 +24,8 @@ class IngestionPipeline:
             ↓
         Content Processing
             ↓
+        Content Enrichment
+            ↓
         Content Normalization
             ↓
         CanonicalContent
@@ -29,19 +33,24 @@ class IngestionPipeline:
 
     def __init__(
         self,
+        *,
         detector: InputDetector,
         router: ProcessorRouter,
         normalizer: ContentNormalizer,
+        enrichment: ContentEnrichmentService | None = None,
     ) -> None:
         self.detector = detector
         self.router = router
         self.normalizer = normalizer
+        self.enrichment = enrichment
 
     async def run(
         self,
         request: IngestionRequest,
     ) -> CanonicalContent:
-        """Execute the complete ingestion pipeline."""
+        """
+        Execute the complete ingestion pipeline.
+        """
 
         # ---------------------------------------------------------
         # 1. Detect input type
@@ -79,11 +88,25 @@ class IngestionPipeline:
         )
 
         # ---------------------------------------------------------
-        # 5. Normalize into canonical representation
+        # 5. Enrich extracted content
         # ---------------------------------------------------------
 
-        canonical_content = await self.normalizer.normalize(
-            extracted_content
+        if self.enrichment is not None:
+            extracted_content = (
+                await self.enrichment.enrich(
+                    request=request,
+                    content=extracted_content,
+                )
+            )
+
+        # ---------------------------------------------------------
+        # 6. Normalize into canonical representation
+        # ---------------------------------------------------------
+
+        canonical_content = (
+            await self.normalizer.normalize(
+                extracted_content
+            )
         )
 
         return canonical_content

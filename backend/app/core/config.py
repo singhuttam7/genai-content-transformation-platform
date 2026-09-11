@@ -64,6 +64,16 @@ class Settings(BaseSettings):
     google_api_key: str | None = None
 
     # ---------------------------------------------------------
+# OCR
+# ---------------------------------------------------------
+
+    ocr_enabled: bool = True
+    ocr_provider: str = "tesseract"
+    ocr_default_language: str = "eng"
+    ocr_timeout_seconds: float = 30.0
+    tesseract_executable_path: str | None = None
+
+    # ---------------------------------------------------------
     # RAG
     # ---------------------------------------------------------
 

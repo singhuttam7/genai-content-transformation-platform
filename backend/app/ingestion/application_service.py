@@ -4,16 +4,40 @@ from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ingestion.factory import create_ingestion_pipeline
-from app.ingestion.results import IngestionResult
+from app.ingestion.content_resolver import (
+    InputContentResolver,
+)
+from app.ingestion.factory import (
+    create_ingestion_pipeline,
+)
+from app.ingestion.ocr.factory import (
+    create_ocr_provider,
+)
+from app.ingestion.ocr.provider import (
+    OCRProvider,
+)
+from app.ingestion.results import (
+    IngestionResult,
+)
 from app.ingestion.schemas import (
     IngestionRequest,
     ProcessingStatus,
 )
-from app.ingestion.source_service import SourcePersistenceService
-from app.storage.compensation import StorageCompensationService
-from app.storage.errors import StorageCompensationError
-from app.storage.service import StorageService
+from app.ingestion.source_service import (
+    SourcePersistenceService,
+)
+from app.ingestion.storage_resolver import (
+    StorageBackedContentResolver,
+)
+from app.storage.compensation import (
+    StorageCompensationService,
+)
+from app.storage.errors import (
+    StorageCompensationError,
+)
+from app.storage.service import (
+    StorageService,
+)
 
 
 class IngestionApplicationService:
@@ -21,24 +45,46 @@ class IngestionApplicationService:
     Application-level orchestration service for source ingestion.
 
     Responsibilities:
-
     - Generate a stable source identity.
     - Persist the original source content.
     - Persist source metadata in PostgreSQL.
+    - Resolve content for downstream processing.
+    - Configure OCR enrichment.
     - Execute the ingestion pipeline.
     - Maintain source lifecycle state.
     - Compensate storage when database persistence fails.
     - Preserve compensation failures for recovery.
+
+    Dependency architecture:
+
+        StorageService
+              ↓
+        StorageBackedContentResolver
+              ↓
+        ContentEnrichmentService
+              ↑
+        OCRProvider
+              ↑
+        OCR Factory
+              ↓
+        IngestionPipeline
     """
 
     def __init__(
         self,
+        *,
         session: AsyncSession,
         storage: StorageService,
         compensation: StorageCompensationService | None = None,
+        content_resolver: InputContentResolver | None = None,
+        ocr_provider: OCRProvider | None = None,
     ) -> None:
         self.session = session
         self.storage = storage
+
+        # =====================================================
+        # Storage compensation
+        # =====================================================
 
         self.compensation = (
             compensation
@@ -47,7 +93,49 @@ class IngestionApplicationService:
             )
         )
 
-        self.pipeline = create_ingestion_pipeline()
+        # =====================================================
+        # Content resolver
+        #
+        # Production default:
+        # StorageBackedContentResolver
+        #
+        # Tests can inject a fake resolver.
+        # =====================================================
+
+        self.content_resolver = (
+            content_resolver
+            or StorageBackedContentResolver(
+                storage,
+            )
+        )
+
+        # =====================================================
+        # OCR provider
+        #
+        # Production default:
+        # Configured provider from OCR factory.
+        #
+        # Tests can inject a fake OCR provider.
+        # =====================================================
+
+        self.ocr_provider = (
+            ocr_provider
+            if ocr_provider is not None
+            else create_ocr_provider()
+        )
+
+        # =====================================================
+        # Ingestion pipeline
+        # =====================================================
+
+        self.pipeline = create_ingestion_pipeline(
+            content_resolver=self.content_resolver,
+            ocr_provider=self.ocr_provider,
+        )
+
+        # =====================================================
+        # Source persistence
+        # =====================================================
 
         self.source_service = (
             SourcePersistenceService(
@@ -167,6 +255,7 @@ class IngestionApplicationService:
             await self.session.commit()
 
         except Exception as original_error:
+
             # -------------------------------------------------
             # Roll back PostgreSQL transaction.
             # -------------------------------------------------
@@ -186,6 +275,7 @@ class IngestionApplicationService:
                     )
 
                 except Exception as compensation_error:
+
                     # -------------------------------------------------
                     # Both failures are important.
                     #
@@ -223,6 +313,7 @@ class IngestionApplicationService:
             )
 
         except Exception:
+
             # -------------------------------------------------
             # The original source is intentionally retained.
             #

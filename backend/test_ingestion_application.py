@@ -433,3 +433,296 @@ async def test_ingestion_application_creates_asr_provider_by_default():
             user_id=user_id,
             project_id=project_id,
         )
+
+# ============================================================
+# A3.7.7 — Real ASR Application-Level E2E
+# ============================================================
+
+
+@pytest.mark.real_asr
+@pytest.mark.asyncio
+async def test_real_audio_ingestion_application_e2e():
+    """
+    Verify the complete production-style application flow for
+    real audio ingestion with Faster-Whisper ASR.
+
+    Covers:
+
+    Real WAV
+        ↓
+    IngestionApplicationService
+        ↓
+    Storage
+        ↓
+    Source Persistence
+        ↓
+    Ingestion Pipeline
+        ↓
+    Audio Processor
+        ↓
+    FFprobe Media Inspection
+        ↓
+    Faster-Whisper ASR
+        ↓
+    Content Enrichment
+        ↓
+    Canonical Content
+        ↓
+    IngestionResult
+        ↓
+    Database Verification
+    """
+
+    from pathlib import Path
+
+    from app.ingestion.speech.faster_whisper import (
+        FasterWhisperASRProvider,
+    )
+    from app.ingestion.schemas import ContentBlockType
+
+    user_id = uuid4()
+    project_id = uuid4()
+
+    storage = get_storage_service()
+
+    audio_path = Path(r".\test_data\asr\sample_en.wav")
+    audio = audio_path.read_bytes()
+
+    storage_key = None
+    result = None
+
+    async with SessionFactory() as session:
+        # ----------------------------------------------------
+        # Create test user and project
+        # ----------------------------------------------------
+
+        user = User(
+            id=user_id,
+            email=f"real-asr-{user_id}@example.com",
+            name="Real ASR Test User",
+        )
+
+        project = Project(
+            id=project_id,
+            name=f"Real ASR Test Project {project_id}",
+            owner_id=user_id,
+        )
+
+        session.add(user)
+        session.add(project)
+
+        await session.commit()
+
+        # ----------------------------------------------------
+        # Use the real Faster-Whisper provider
+        # ----------------------------------------------------
+
+        asr_provider = FasterWhisperASRProvider(
+            model_name="small",
+            device="cpu",
+            compute_type="int8",
+        )
+
+        service = IngestionApplicationService(
+            session=session,
+            storage=storage,
+            asr_provider=asr_provider,
+        )
+
+        # ----------------------------------------------------
+        # Real audio ingestion request
+        # ----------------------------------------------------
+
+        request = IngestionRequest(
+            project_id=project_id,
+            input_type=InputType.AUDIO,
+            title="AI Communication Audio",
+            filename="sample_en.wav",
+            mime_type="audio/wav",
+            content=audio,
+            metadata={
+                "asr_language": "en",
+            },
+        )
+
+        # ----------------------------------------------------
+        # Execute complete application flow
+        # ----------------------------------------------------
+
+        result = await service.ingest(
+            request=request,
+        )
+
+        # ----------------------------------------------------
+        # Verify ingestion result
+        # ----------------------------------------------------
+
+        assert result.source_id is not None
+        assert result.storage_key is not None
+        assert result.storage_uri is not None
+        assert result.content_hash is not None
+        assert result.status == ProcessingStatus.COMPLETED
+
+        storage_key = result.storage_key
+
+        # ----------------------------------------------------
+        # Verify canonical content
+        # ----------------------------------------------------
+
+        assert result.canonical_content is not None
+
+        canonical = result.canonical_content
+
+        expected_text = (
+            "Artificial intelligence is transforming communication. "
+            "Organizations are using AI to create content faster."
+        )
+
+        assert canonical.text.strip() == expected_text
+
+        assert canonical.title == "AI Communication Audio"
+
+        assert canonical.language == "en"
+
+        # ----------------------------------------------------
+        # Verify source relationship
+        # ----------------------------------------------------
+
+        assert canonical.source.source_id == result.source_id
+
+        # ----------------------------------------------------
+        # Verify ASR metadata
+        # ----------------------------------------------------
+
+        assert canonical.metadata is not None
+        assert canonical.metadata["asr"]["status"] == "completed"
+        assert canonical.metadata["asr"]["provider"] == "faster_whisper"
+        assert canonical.metadata["asr"]["segment_count"] == 2
+
+        # ----------------------------------------------------
+        # Verify transcript blocks
+        # ----------------------------------------------------
+
+        transcript_blocks = [
+            block
+            for block in canonical.segments
+            if block.block_type == ContentBlockType.TRANSCRIPT
+        ]
+
+        assert len(transcript_blocks) == 2
+
+        assert (
+            transcript_blocks[0].content.strip()
+            == "Artificial intelligence is transforming communication."
+        )
+
+        assert (
+            transcript_blocks[1].content.strip()
+            == "Organizations are using AI to create content faster."
+        )
+
+        # ----------------------------------------------------
+        # Verify timestamps
+        # ----------------------------------------------------
+
+        for block in transcript_blocks:
+            assert block.start_time is not None
+            assert block.end_time is not None
+            assert block.start_time < block.end_time
+
+        # ----------------------------------------------------
+        # Verify database persistence
+        # ----------------------------------------------------
+
+    async with SessionFactory() as verify_session:
+        source = await verify_session.get(
+            Source,
+            result.source_id,
+        )
+
+        project = await verify_session.get(
+            Project,
+            project_id,
+        )
+
+        user = await verify_session.get(
+            User,
+            user_id,
+        )
+
+        assert source is not None
+        assert project is not None
+        assert user is not None
+
+        assert source.project_id == project_id
+
+    # --------------------------------------------------------
+    # Verify stored original audio
+    # --------------------------------------------------------
+
+    assert storage_key is not None
+
+    stored_audio = await storage.download(storage_key)
+
+    assert stored_audio == audio
+
+    # --------------------------------------------------------
+    # Cleanup storage
+    # --------------------------------------------------------
+
+    await storage.delete(storage_key)
+
+    # --------------------------------------------------------
+    # Cleanup database
+    # --------------------------------------------------------
+
+    async with SessionFactory() as cleanup_session:
+        source = await cleanup_session.get(
+            Source,
+            result.source_id,
+        )
+
+        project = await cleanup_session.get(
+            Project,
+            project_id,
+        )
+
+        user = await cleanup_session.get(
+            User,
+            user_id,
+        )
+
+        if source is not None:
+            await cleanup_session.delete(source)
+
+        if project is not None:
+            await cleanup_session.delete(project)
+
+        if user is not None:
+            await cleanup_session.delete(user)
+
+        await cleanup_session.commit()
+
+    # --------------------------------------------------------
+    # Verify cleanup
+    # --------------------------------------------------------
+
+    async with SessionFactory() as verify_cleanup_session:
+        source = await verify_cleanup_session.get(
+            Source,
+            result.source_id,
+        )
+
+        project = await verify_cleanup_session.get(
+            Project,
+            project_id,
+        )
+
+        user = await verify_cleanup_session.get(
+            User,
+            user_id,
+        )
+
+        assert source is None
+        assert project is None
+        assert user is None

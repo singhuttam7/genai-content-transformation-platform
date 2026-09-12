@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import math
 from functools import partial
 from threading import Lock
@@ -135,13 +136,24 @@ class FasterWhisperASRProvider:
         Empty transcript segments are ignored.
         """
 
-        text = str(getattr(segment, "text", "")).strip()
+        text = str(
+            getattr(segment, "text", "")
+        ).strip()
 
         if not text:
             return None
 
-        raw_start = getattr(segment, "start", None)
-        raw_end = getattr(segment, "end", None)
+        raw_start = getattr(
+            segment,
+            "start",
+            None,
+        )
+
+        raw_end = getattr(
+            segment,
+            "end",
+            None,
+        )
 
         start_time = max(
             self._safe_float(
@@ -195,14 +207,25 @@ class FasterWhisperASRProvider:
     ) -> ASRResult:
         """
         Execute synchronous faster-whisper inference.
+
+        The ASR contract stores audio as bytes, while faster-whisper
+        accepts BinaryIO. BytesIO provides a safe in-memory bridge
+        between the two interfaces.
         """
 
         model = self._load_model()
 
-        language = request.language or self.default_language
+        language = (
+            request.language
+            or self.default_language
+        )
+
+        audio_stream = io.BytesIO(
+            request.audio
+        )
 
         segments, info = model.transcribe(
-            request.audio,
+            audio_stream,
             language=language,
             beam_size=5,
             vad_filter=True,
@@ -212,15 +235,26 @@ class FasterWhisperASRProvider:
         text_parts: list[str] = []
 
         for segment in segments:
-            result_segment = self._build_segment(segment)
+            result_segment = self._build_segment(
+                segment
+            )
 
             if result_segment is None:
                 continue
 
-            result_segments.append(result_segment)
-            text_parts.append(result_segment.text)
+            result_segments.append(
+                result_segment
+            )
 
-        detected_language = getattr(info, "language", None)
+            text_parts.append(
+                result_segment.text
+            )
+
+        detected_language = getattr(
+            info,
+            "language",
+            None,
+        )
 
         language_probability = getattr(
             info,
@@ -232,13 +266,17 @@ class FasterWhisperASRProvider:
             "model": self.model_name,
             "device": self.device,
             "compute_type": self.compute_type,
-            "segment_count": len(result_segments),
+            "segment_count": len(
+                result_segments
+            ),
         }
 
         if language_probability is not None:
-            metadata["language_probability"] = self._safe_float(
-                language_probability,
-                field_name="language_probability",
+            metadata["language_probability"] = (
+                self._safe_float(
+                    language_probability,
+                    field_name="language_probability",
+                )
             )
 
         if not result_segments:
@@ -286,7 +324,10 @@ class FasterWhisperASRProvider:
         try:
             return await asyncio.wait_for(
                 asyncio.to_thread(
-                    partial(self._transcribe_sync, request)
+                    partial(
+                        self._transcribe_sync,
+                        request,
+                    )
                 ),
                 timeout=self.timeout_seconds,
             )
@@ -297,7 +338,9 @@ class FasterWhisperASRProvider:
                 provider=self.name,
                 metadata={
                     "reason": "timeout",
-                    "timeout_seconds": self.timeout_seconds,
+                    "timeout_seconds": (
+                        self.timeout_seconds
+                    ),
                 },
             )
 

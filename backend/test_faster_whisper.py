@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -54,8 +55,16 @@ async def test_transcribe_returns_segments_and_text() -> None:
     fake_model.transcribe.return_value = (
         iter(
             [
-                make_segment(" Hello", 0.0, 1.2),
-                make_segment(" world", 1.2, 2.4),
+                make_segment(
+                    " Hello",
+                    0.0,
+                    1.2,
+                ),
+                make_segment(
+                    " world",
+                    1.2,
+                    2.4,
+                ),
             ]
         ),
         info,
@@ -66,7 +75,9 @@ async def test_transcribe_returns_segments_and_text() -> None:
         return_value=fake_model,
     ):
         result = await provider.transcribe(
-            ASRRequest(audio=b"fake-audio")
+            ASRRequest(
+                audio=b"fake-audio"
+            )
         )
 
     assert result.status == ASRStatus.COMPLETED
@@ -144,7 +155,9 @@ async def test_default_language_is_used() -> None:
         return_value=fake_model,
     ):
         await provider.transcribe(
-            ASRRequest(audio=b"fake-audio")
+            ASRRequest(
+                audio=b"fake-audio"
+            )
         )
 
     kwargs = fake_model.transcribe.call_args.kwargs
@@ -208,7 +221,9 @@ async def test_no_speech_result() -> None:
         return_value=fake_model,
     ):
         result = await provider.transcribe(
-            ASRRequest(audio=b"fake-audio")
+            ASRRequest(
+                audio=b"fake-audio"
+            )
         )
 
     assert result.status == ASRStatus.NO_SPEECH
@@ -224,7 +239,9 @@ async def test_empty_audio_fails_without_loading_model() -> None:
         "faster_whisper.WhisperModel"
     ) as model_class:
         result = await provider.transcribe(
-            ASRRequest(audio=b"")
+            ASRRequest(
+                audio=b""
+            )
         )
 
     assert result.status == ASRStatus.FAILED
@@ -317,7 +334,9 @@ async def test_provider_error_is_returned_as_failed() -> None:
         ),
     ):
         result = await provider.transcribe(
-            ASRRequest(audio=b"fake-audio")
+            ASRRequest(
+                audio=b"fake-audio"
+            )
         )
 
     assert result.status == ASRStatus.FAILED
@@ -352,7 +371,9 @@ async def test_malformed_segment_returns_failed_result() -> None:
         return_value=fake_model,
     ):
         result = await provider.transcribe(
-            ASRRequest(audio=b"fake-audio")
+            ASRRequest(
+                audio=b"fake-audio"
+            )
         )
 
     assert result.status == ASRStatus.FAILED
@@ -388,7 +409,9 @@ async def test_invalid_no_speech_probability_returns_failed_result() -> None:
         return_value=fake_model,
     ):
         result = await provider.transcribe(
-            ASRRequest(audio=b"fake-audio")
+            ASRRequest(
+                audio=b"fake-audio"
+            )
         )
 
     assert result.status == ASRStatus.FAILED
@@ -427,9 +450,43 @@ async def test_invalid_language_probability_returns_failed_result() -> None:
         return_value=fake_model,
     ):
         result = await provider.transcribe(
-            ASRRequest(audio=b"fake-audio")
+            ASRRequest(
+                audio=b"fake-audio"
+            )
         )
 
     assert result.status == ASRStatus.FAILED
     assert result.metadata["reason"] == "provider_error"
     assert result.metadata["error_type"] == "ValueError"
+
+
+# =========================================================
+# Timeout behavior
+# =========================================================
+
+
+@pytest.mark.asyncio
+async def test_transcription_timeout_returns_failed_result() -> None:
+    provider = FasterWhisperASRProvider(
+        timeout_seconds=0.05,
+    )
+
+    with patch.object(
+        provider,
+        "_transcribe_sync",
+        side_effect=lambda request: time.sleep(0.2),
+    ):
+        result = await provider.transcribe(
+            ASRRequest(
+                audio=b"fake-audio"
+            )
+        )
+
+    assert result.status == ASRStatus.FAILED
+
+    assert result.metadata["reason"] == "timeout"
+
+    assert (
+        result.metadata["timeout_seconds"]
+        == 0.05
+    )

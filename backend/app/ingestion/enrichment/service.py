@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import Any
 
 from app.ingestion.content_resolver import InputContentResolver
 
@@ -16,6 +17,15 @@ from app.ingestion.speech.schemas import (
     ASRRequest,
     ASRResult,
     ASRStatus,
+)
+
+from app.ingestion.video.asr import (
+    VideoASRService,
+)
+from app.ingestion.video.schemas import (
+    VideoASRRequest,
+    VideoASRStatus,
+    VideoInfo,
 )
 
 from app.ingestion.schemas import (
@@ -38,8 +48,15 @@ class ContentEnrichmentService:
     - Preserve original extracted content.
     - Add OCR-derived textual blocks.
     - Add ASR-derived transcript blocks.
+    - Invoke video-specific ASR processing.
     - Preserve enrichment metadata.
-    - Treat OCR and ASR failures as non-fatal.
+    - Treat enrichment failures as non-fatal where appropriate.
+
+    Current enrichment capabilities:
+
+        IMAGE -> OCR
+        AUDIO -> ASR
+        VIDEO -> VideoASRService
     """
 
     def __init__(
@@ -48,10 +65,12 @@ class ContentEnrichmentService:
         content_resolver: InputContentResolver,
         ocr_provider: OCRProvider | None = None,
         asr_provider: ASRProvider | None = None,
+        video_asr_service: VideoASRService | None = None,
     ) -> None:
         self.content_resolver = content_resolver
         self.ocr_provider = ocr_provider
         self.asr_provider = asr_provider
+        self.video_asr_service = video_asr_service
 
     # =========================================================
     # Main enrichment entry point
@@ -68,10 +87,13 @@ class ContentEnrichmentService:
 
         IMAGE -> OCR
         AUDIO -> ASR
+        VIDEO -> Video ASR
         Other input types -> unchanged
         """
 
-        enriched = content.model_copy(deep=True)
+        enriched = content.model_copy(
+            deep=True
+        )
 
         if request.input_type == InputType.IMAGE:
             return await self._enrich_image(
@@ -81,6 +103,12 @@ class ContentEnrichmentService:
 
         if request.input_type == InputType.AUDIO:
             return await self._enrich_audio(
+                request=request,
+                content=enriched,
+            )
+
+        if request.input_type == InputType.VIDEO:
+            return await self._enrich_video(
                 request=request,
                 content=enriched,
             )
@@ -183,10 +211,6 @@ class ContentEnrichmentService:
             "block_count": len(result.blocks),
             **result.metadata,
         }
-
-        # -----------------------------------------------------
-        # Non-successful OCR is non-fatal.
-        # -----------------------------------------------------
 
         if result.status != OCRStatus.COMPLETED:
             return content.model_copy(
@@ -375,6 +399,330 @@ class ContentEnrichmentService:
             },
         )
 
+    # =========================================================
+    # VIDEO -> ASR
+    # =========================================================
+
+    async def _enrich_video(
+        self,
+        *,
+        request: IngestionRequest,
+        content: ExtractedContent,
+    ) -> ExtractedContent:
+        """
+        Perform video-to-ASR enrichment.
+
+        The video processor is responsible for inspecting the
+        video and placing provider-independent VideoInfo inside:
+
+            content.metadata["video"]["video_info"]
+
+        This method:
+        1. Resolves the original video bytes.
+        2. Retrieves VideoInfo.
+        3. Builds VideoASRRequest.
+        4. Invokes VideoASRService.
+        5. Preserves the structured video-ASR result.
+        6. Reuses the existing ASRResult -> TRANSCRIPT mapping.
+
+        Video ASR failures do not discard the original video
+        content.
+        """
+
+        if self.video_asr_service is None:
+            return content
+
+        # ---------------------------------------------------------
+        # 1. Resolve original video bytes
+        # ---------------------------------------------------------
+
+        try:
+            video_bytes = await self.content_resolver.resolve(
+                request
+            )
+
+        except Exception as exc:
+            return self._record_video_asr_resolution_failure(
+                content,
+                exc,
+            )
+
+        # ---------------------------------------------------------
+        # 2. Retrieve VideoInfo produced by the video processor
+        # ---------------------------------------------------------
+
+        video_info = self._get_video_info(
+            content
+        )
+
+        if video_info is None:
+            return self._record_video_asr_failure(
+                content=content,
+                status=VideoASRStatus.ASR_FAILED,
+                reason=(
+                    "VideoInfo was not available from "
+                    "the video processing stage."
+                ),
+                error_type="MissingVideoInfo",
+            )
+
+        # ---------------------------------------------------------
+        # 3. Build VideoASRRequest
+        # ---------------------------------------------------------
+
+        video_asr_request = VideoASRRequest(
+            language=self._get_video_asr_language(
+                request
+            ),
+            metadata={
+                "source_id": (
+                    str(request.source_id)
+                    if request.source_id is not None
+                    else None
+                ),
+                "filename": request.filename,
+                "mime_type": request.mime_type,
+            },
+        )
+
+        # ---------------------------------------------------------
+        # 4. Invoke VideoASRService
+        # ---------------------------------------------------------
+
+        try:
+            video_asr_result = (
+                await self.video_asr_service.transcribe(
+                    video_bytes,
+                    video_info=video_info,
+                    request=video_asr_request,
+                    filename=request.filename,
+                )
+            )
+
+        except Exception as exc:
+            return self._record_video_asr_failure(
+                content=content,
+                status=VideoASRStatus.ASR_FAILED,
+                reason=(
+                    "Video ASR processing failed."
+                ),
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+
+        # ---------------------------------------------------------
+        # 5. Preserve structured video ASR metadata
+        # ---------------------------------------------------------
+
+        enriched = self._apply_video_asr_metadata(
+            content=content,
+            result=video_asr_result,
+        )
+
+        # ---------------------------------------------------------
+        # 6. Reuse existing ASR result mapper
+        # ---------------------------------------------------------
+
+        if (
+            video_asr_result.asr_result is None
+        ):
+            return enriched
+
+        return self._apply_asr_result(
+            content=enriched,
+            result=video_asr_result.asr_result,
+        )
+
+    # =========================================================
+    # VIDEO metadata helpers
+    # =========================================================
+
+    @staticmethod
+    def _get_video_info(
+        content: ExtractedContent,
+    ) -> VideoInfo | None:
+        """
+        Retrieve VideoInfo from the structured metadata emitted
+        by VideoDocumentProcessor.
+
+        Returns None if the metadata is missing or malformed.
+        """
+
+        video_metadata = content.metadata.get(
+            "video"
+        )
+
+        if not isinstance(
+            video_metadata,
+            dict,
+        ):
+            return None
+
+        raw_video_info = video_metadata.get(
+            "video_info"
+        )
+
+        if isinstance(
+            raw_video_info,
+            VideoInfo,
+        ):
+            return raw_video_info
+
+        if not isinstance(
+            raw_video_info,
+            dict,
+        ):
+            return None
+
+        try:
+            return VideoInfo.model_validate(
+                raw_video_info
+            )
+        except Exception:
+            return None
+
+    @staticmethod
+    def _get_video_asr_language(
+        request: IngestionRequest,
+    ) -> str | None:
+        """
+        Resolve the requested video-ASR language.
+
+        The video-specific key is preferred, with the general ASR
+        key retained as a compatibility fallback.
+        """
+
+        language = request.metadata.get(
+            "video_asr_language"
+        )
+
+        if language is None:
+            language = request.metadata.get(
+                "asr_language"
+            )
+
+        if language is None:
+            return None
+
+        return str(language)
+
+    @staticmethod
+    def _apply_video_asr_metadata(
+        *,
+        content: ExtractedContent,
+        result: Any,
+    ) -> ExtractedContent:
+        """
+        Preserve the complete structured VideoASRResult metadata.
+
+        This keeps capability-level information such as:
+
+        - no audio
+        - audio extraction failure
+        - ASR failure
+        - no speech
+        - provider metadata
+        - extraction metadata
+
+        separate from the canonical transcript blocks.
+        """
+
+        metadata = deepcopy(
+            content.metadata
+        )
+
+        metadata["video_asr"] = {
+            "status": result.status.value,
+            "audio_extraction": (
+                deepcopy(
+                    result.audio_extraction
+                )
+            ),
+            "errors": list(
+                result.errors
+            ),
+            **deepcopy(
+                result.metadata
+            ),
+        }
+
+        return content.model_copy(
+            update={
+                "metadata": metadata,
+            }
+        )
+
+    @staticmethod
+    def _record_video_asr_resolution_failure(
+        content: ExtractedContent,
+        error: Exception,
+    ) -> ExtractedContent:
+        """
+        Record video source-resolution failure without
+        discarding the original extracted video content.
+        """
+
+        metadata = deepcopy(
+            content.metadata
+        )
+
+        metadata["video_asr"] = {
+            "status": (
+                VideoASRStatus.ASR_FAILED.value
+            ),
+            "stage": "video_resolution",
+            "error_type": type(error).__name__,
+            "error": str(error),
+            "retryable": False,
+        }
+
+        return content.model_copy(
+            update={
+                "metadata": metadata,
+            }
+        )
+
+    @staticmethod
+    def _record_video_asr_failure(
+        *,
+        content: ExtractedContent,
+        status: VideoASRStatus,
+        reason: str,
+        error_type: str,
+        error: str | None = None,
+    ) -> ExtractedContent:
+        """
+        Record video ASR failure without destroying the original
+        extracted content.
+        """
+
+        metadata = deepcopy(
+            content.metadata
+        )
+
+        failure_metadata: dict[str, object] = {
+            "status": status.value,
+            "stage": "video_asr",
+            "reason": reason,
+            "error_type": error_type,
+            "retryable": False,
+        }
+
+        if error is not None:
+            failure_metadata["error"] = error
+
+        metadata["video_asr"] = failure_metadata
+
+        return content.model_copy(
+            update={
+                "metadata": metadata,
+            }
+        )
+
+    # =========================================================
+    # Existing ASR result mapping
+    # =========================================================
+
     @staticmethod
     def _apply_asr_result(
         *,
@@ -384,8 +732,13 @@ class ContentEnrichmentService:
         """
         Apply ASR result to extracted content.
 
-        Each ASR segment becomes a TRANSCRIPT block
-        containing timing and provider metadata.
+        Each ASR segment becomes a TRANSCRIPT block containing
+        timing and provider metadata.
+
+        This method is intentionally shared by:
+
+            AUDIO -> ASR
+            VIDEO -> VideoASR -> ASRResult
         """
 
         metadata = deepcopy(
@@ -397,13 +750,11 @@ class ContentEnrichmentService:
             "provider": result.provider,
             "language": result.language,
             "confidence": result.confidence,
-            "segment_count": len(result.segments),
+            "segment_count": len(
+                result.segments
+            ),
             **result.metadata,
         }
-
-        # -----------------------------------------------------
-        # Non-successful ASR is non-fatal.
-        # -----------------------------------------------------
 
         if result.status != ASRStatus.COMPLETED:
             return content.model_copy(
@@ -427,14 +778,18 @@ class ContentEnrichmentService:
             + 1
         )
 
-        transcript_blocks: list[ContentBlock] = []
+        transcript_blocks: list[
+            ContentBlock
+        ] = []
 
         for offset, segment in enumerate(
             result.segments
         ):
             transcript_blocks.append(
                 ContentBlock(
-                    block_type=ContentBlockType.TRANSCRIPT,
+                    block_type=(
+                        ContentBlockType.TRANSCRIPT
+                    ),
                     content=segment.text,
                     order=next_order + offset,
                     start_time=segment.start_time,

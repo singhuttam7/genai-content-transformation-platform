@@ -1,6 +1,10 @@
 [tool.pytest.ini_options]
+testpaths = ["tests"]
+
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+
 markers = [
     "real_asr: tests requiring the real Faster-Whisper ASR model",
+    "real_video: tests requiring real video processing tools/models",
 ]

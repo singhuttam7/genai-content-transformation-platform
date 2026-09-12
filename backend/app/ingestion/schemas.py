@@ -41,6 +41,7 @@ class ContentBlockType(StrEnum):
     TABLE = "table"
     IMAGE = "image"
     AUDIO = "audio"
+    VIDEO = "video"
     LIST = "list"
     CODE = "code"
     QUOTE = "quote"

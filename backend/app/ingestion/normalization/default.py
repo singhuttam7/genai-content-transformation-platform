@@ -42,6 +42,7 @@ class DefaultContentNormalizer:
         {
             ContentBlockType.IMAGE,
              ContentBlockType.AUDIO,
+             ContentBlockType.VIDEO,
         }
     )
 

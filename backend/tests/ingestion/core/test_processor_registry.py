@@ -7,8 +7,12 @@ from app.ingestion.parsers.document import TextDocumentProcessor
 from app.ingestion.parsers.image import ImageDocumentProcessor
 from app.ingestion.parsers.pdf import PDFProcessor
 from app.ingestion.parsers.text import TextProcessor
+
 from app.ingestion.registry import create_processor_router
+
 from app.ingestion.schemas import InputType
+
+from app.ingestion.video.processor import VideoDocumentProcessor
 
 
 def test_processor_registry() -> None:
@@ -25,14 +29,14 @@ def test_processor_registry() -> None:
     assert router.supports(InputType.PDF)
     assert router.supports(InputType.DOCX)
     assert router.supports(InputType.IMAGE)
+    assert router.supports(InputType.AUDIO)
+    assert router.supports(InputType.VIDEO)
 
     # ---------------------------------------------------------
     # Unsupported input types
     # ---------------------------------------------------------
 
     assert not router.supports(InputType.URL)
-    assert router.supports(InputType.AUDIO)
-    assert not router.supports(InputType.VIDEO)
 
     # ---------------------------------------------------------
     # Processor resolution
@@ -73,6 +77,11 @@ def test_processor_registry() -> None:
         ImageDocumentProcessor,
     )
 
+    assert isinstance(
+        router.get_processor(InputType.VIDEO),
+        VideoDocumentProcessor,
+    )
+
 
 def test_processor_registry_supported_types() -> None:
     router = create_processor_router()
@@ -90,6 +99,7 @@ def test_processor_registry_supported_types() -> None:
         InputType.DOCX,
         InputType.IMAGE,
         InputType.AUDIO,
+        InputType.VIDEO,
     }
 
     assert supported_types == expected_types
@@ -124,6 +134,14 @@ def test_processor_registry_processor_instances() -> None:
 
     image_processor = router.get_processor(
         InputType.IMAGE
+    )
+
+    audio_processor = router.get_processor(
+        InputType.AUDIO
+    )
+
+    video_processor = router.get_processor(
+        InputType.VIDEO
     )
 
     # ---------------------------------------------------------
@@ -168,6 +186,16 @@ def test_processor_registry_processor_instances() -> None:
         ImageDocumentProcessor,
     )
 
+    assert isinstance(
+        audio_processor,
+        object,
+    )
+
+    assert isinstance(
+        video_processor,
+        VideoDocumentProcessor,
+    )
+
 
 def test_processor_registry_unsupported_input_type() -> None:
     router = create_processor_router()
@@ -182,4 +210,4 @@ def test_processor_registry_unsupported_input_type() -> None:
 def test_processor_registry_has_expected_count() -> None:
     router = create_processor_router()
 
-    assert len(router.supported_types) == 8
+    assert len(router.supported_types) == 9

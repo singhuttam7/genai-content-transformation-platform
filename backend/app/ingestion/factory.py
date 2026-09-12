@@ -24,6 +24,10 @@ from app.ingestion.speech.provider import (
     ASRProvider,
 )
 
+from app.ingestion.video.asr import (
+    VideoASRService,
+)
+
 from app.ingestion.pipeline import (
     IngestionPipeline,
 )
@@ -38,12 +42,14 @@ def create_ingestion_pipeline(
     content_resolver: InputContentResolver | None = None,
     ocr_provider: OCRProvider | None = None,
     asr_provider: ASRProvider | None = None,
+    video_asr_service: VideoASRService | None = None,
 ) -> IngestionPipeline:
     """
     Create the production ingestion pipeline.
 
     Enrichment dependencies are injected so the pipeline remains
-    independent of concrete storage, OCR, and ASR implementations.
+    independent of concrete storage, OCR, ASR, and video-ASR
+    implementations.
 
     Parameters:
         content_resolver:
@@ -54,6 +60,10 @@ def create_ingestion_pipeline(
 
         asr_provider:
             Optional ASR provider used for AUDIO inputs.
+
+        video_asr_service:
+            Optional video-to-ASR service used by the future
+            VIDEO multimodal enrichment pipeline.
 
     Architecture:
 
@@ -67,7 +77,8 @@ def create_ingestion_pipeline(
           ↓
         Content Enrichment
           ├── OCR
-          └── ASR
+          ├── ASR
+          └── Video ASR
           ↓
         Normalizer
           ↓
@@ -103,6 +114,7 @@ def create_ingestion_pipeline(
             content_resolver=content_resolver,
             ocr_provider=ocr_provider,
             asr_provider=asr_provider,
+            video_asr_service=video_asr_service,
         )
 
     # =========================================================

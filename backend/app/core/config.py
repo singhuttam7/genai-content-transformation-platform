@@ -73,6 +73,19 @@ class Settings(BaseSettings):
     ocr_timeout_seconds: float = 30.0
     tesseract_executable_path: str | None = None
 
+
+        # ---------------------------------------------------------
+    # ASR / Speech Recognition
+    # ---------------------------------------------------------
+
+    asr_enabled: bool = True
+    asr_provider: str = "faster_whisper"
+    asr_default_language: str | None = None
+    asr_timeout_seconds: float = 300.0
+
+    whisper_model: str = "small"
+    whisper_device: str = "cpu"
+    whisper_compute_type: str = "int8"
     # ---------------------------------------------------------
     # RAG
     # ---------------------------------------------------------

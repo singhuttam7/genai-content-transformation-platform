@@ -7,34 +7,52 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ingestion.content_resolver import (
     InputContentResolver,
 )
+
 from app.ingestion.factory import (
     create_ingestion_pipeline,
 )
+
 from app.ingestion.ocr.factory import (
     create_ocr_provider,
 )
+
 from app.ingestion.ocr.provider import (
     OCRProvider,
 )
+
+from app.ingestion.speech.factory import (
+    create_asr_provider,
+)
+
+from app.ingestion.speech.provider import (
+    ASRProvider,
+)
+
 from app.ingestion.results import (
     IngestionResult,
 )
+
 from app.ingestion.schemas import (
     IngestionRequest,
     ProcessingStatus,
 )
+
 from app.ingestion.source_service import (
     SourcePersistenceService,
 )
+
 from app.ingestion.storage_resolver import (
     StorageBackedContentResolver,
 )
+
 from app.storage.compensation import (
     StorageCompensationService,
 )
+
 from app.storage.errors import (
     StorageCompensationError,
 )
+
 from app.storage.service import (
     StorageService,
 )
@@ -50,6 +68,7 @@ class IngestionApplicationService:
     - Persist source metadata in PostgreSQL.
     - Resolve content for downstream processing.
     - Configure OCR enrichment.
+    - Configure ASR enrichment.
     - Execute the ingestion pipeline.
     - Maintain source lifecycle state.
     - Compensate storage when database persistence fails.
@@ -62,10 +81,13 @@ class IngestionApplicationService:
         StorageBackedContentResolver
               ↓
         ContentEnrichmentService
-              ↑
-        OCRProvider
-              ↑
-        OCR Factory
+              ├── OCRProvider
+              │      ↑
+              │   OCR Factory
+              │
+              └── ASRProvider
+                     ↑
+                  ASR Factory
               ↓
         IngestionPipeline
     """
@@ -78,6 +100,7 @@ class IngestionApplicationService:
         compensation: StorageCompensationService | None = None,
         content_resolver: InputContentResolver | None = None,
         ocr_provider: OCRProvider | None = None,
+        asr_provider: ASRProvider | None = None,
     ) -> None:
         self.session = session
         self.storage = storage
@@ -125,12 +148,28 @@ class IngestionApplicationService:
         )
 
         # =====================================================
+        # ASR provider
+        #
+        # Production default:
+        # Configured provider from ASR factory.
+        #
+        # Tests can inject a fake ASR provider.
+        # =====================================================
+
+        self.asr_provider = (
+            asr_provider
+            if asr_provider is not None
+            else create_asr_provider()
+        )
+
+        # =====================================================
         # Ingestion pipeline
         # =====================================================
 
         self.pipeline = create_ingestion_pipeline(
             content_resolver=self.content_resolver,
             ocr_provider=self.ocr_provider,
+            asr_provider=self.asr_provider,
         )
 
         # =====================================================

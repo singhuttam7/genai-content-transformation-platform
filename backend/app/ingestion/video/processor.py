@@ -39,6 +39,7 @@ class VideoDocumentProcessor(ContentProcessor):
     This processor does NOT:
     - perform speech recognition,
     - extract audio for ASR,
+    - extract video frames,
     - perform OCR,
     - perform computer vision,
     - generate captions,
@@ -258,6 +259,10 @@ class VideoDocumentProcessor(ContentProcessor):
             ),
         }
 
+        # ---------------------------------------------------------
+        # Downstream capabilities
+        # ---------------------------------------------------------
+
         metadata["asr"] = {
             "status": "not_requested",
         }
@@ -267,6 +272,10 @@ class VideoDocumentProcessor(ContentProcessor):
         }
 
         metadata["ocr"] = {
+            "status": "not_requested",
+        }
+
+        metadata["frames"] = {
             "status": "not_requested",
         }
 

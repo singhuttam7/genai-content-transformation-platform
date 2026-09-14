@@ -64,8 +64,8 @@ class Settings(BaseSettings):
     google_api_key: str | None = None
 
     # ---------------------------------------------------------
-# OCR
-# ---------------------------------------------------------
+    # OCR
+    # ---------------------------------------------------------
 
     ocr_enabled: bool = True
     ocr_provider: str = "tesseract"
@@ -73,8 +73,7 @@ class Settings(BaseSettings):
     ocr_timeout_seconds: float = 30.0
     tesseract_executable_path: str | None = None
 
-
-        # ---------------------------------------------------------
+    # ---------------------------------------------------------
     # ASR / Speech Recognition
     # ---------------------------------------------------------
 
@@ -86,6 +85,23 @@ class Settings(BaseSettings):
     whisper_model: str = "small"
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
+
+    # ---------------------------------------------------------
+    # Vision
+    # ---------------------------------------------------------
+
+    vision_enabled: bool = True
+    vision_provider: str = "local"
+
+    vision_model: str = "gemma3:4b"
+    vision_base_url: str = "http://localhost:11434"
+
+    vision_timeout_seconds: float = 120.0
+    vision_max_retries: int = 1
+
+    vision_temperature: float = 0.1
+    vision_keep_alive: str | None = "5m"
+
     # ---------------------------------------------------------
     # RAG
     # ---------------------------------------------------------

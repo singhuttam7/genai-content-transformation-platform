@@ -26,6 +26,13 @@ from app.ingestion.video.schemas import (
     VideoASRRequest,
     VideoASRStatus,
     VideoInfo,
+    VisionRequest,
+    VisionResult,
+    VisionStatus,
+)
+
+from app.ingestion.video.vision_orchestration import (
+    VideoVisionService,
 )
 
 from app.ingestion.schemas import (
@@ -49,6 +56,7 @@ class ContentEnrichmentService:
     - Add OCR-derived textual blocks.
     - Add ASR-derived transcript blocks.
     - Invoke video-specific ASR processing.
+    - Invoke video-specific visual analysis.
     - Preserve enrichment metadata.
     - Treat enrichment failures as non-fatal where appropriate.
 
@@ -57,6 +65,7 @@ class ContentEnrichmentService:
         IMAGE -> OCR
         AUDIO -> ASR
         VIDEO -> VideoASRService
+        VIDEO -> VideoVisionService
     """
 
     def __init__(
@@ -66,11 +75,13 @@ class ContentEnrichmentService:
         ocr_provider: OCRProvider | None = None,
         asr_provider: ASRProvider | None = None,
         video_asr_service: VideoASRService | None = None,
+        video_vision_service: VideoVisionService | None = None,
     ) -> None:
         self.content_resolver = content_resolver
         self.ocr_provider = ocr_provider
         self.asr_provider = asr_provider
         self.video_asr_service = video_asr_service
+        self.video_vision_service = video_vision_service
 
     # =========================================================
     # Main enrichment entry point
@@ -87,7 +98,7 @@ class ContentEnrichmentService:
 
         IMAGE -> OCR
         AUDIO -> ASR
-        VIDEO -> Video ASR
+        VIDEO -> Video ASR + Video Vision
         Other input types -> unchanged
         """
 
@@ -400,10 +411,49 @@ class ContentEnrichmentService:
         )
 
     # =========================================================
-    # VIDEO -> ASR
+    # VIDEO -> ASR + VISION
     # =========================================================
 
     async def _enrich_video(
+        self,
+        *,
+        request: IngestionRequest,
+        content: ExtractedContent,
+    ) -> ExtractedContent:
+        """
+        Perform video enrichment.
+
+        Video enrichment consists of two independent capabilities:
+
+            Video -> Video ASR
+            Video -> Video Vision
+
+        Each capability is isolated so that failure of one
+        capability does not destroy successful results from
+        the other capability.
+        """
+
+        enriched = content
+
+        if self.video_asr_service is not None:
+            enriched = await self._enrich_video_asr(
+                request=request,
+                content=enriched,
+            )
+
+        if self.video_vision_service is not None:
+            enriched = await self._enrich_video_vision(
+                request=request,
+                content=enriched,
+            )
+
+        return enriched
+
+    # =========================================================
+    # VIDEO -> ASR
+    # =========================================================
+
+    async def _enrich_video_asr(
         self,
         *,
         request: IngestionRequest,
@@ -417,24 +467,9 @@ class ContentEnrichmentService:
 
             content.metadata["video"]["video_info"]
 
-        This method:
-        1. Resolves the original video bytes.
-        2. Retrieves VideoInfo.
-        3. Builds VideoASRRequest.
-        4. Invokes VideoASRService.
-        5. Preserves the structured video-ASR result.
-        6. Reuses the existing ASRResult -> TRANSCRIPT mapping.
-
         Video ASR failures do not discard the original video
         content.
         """
-
-        if self.video_asr_service is None:
-            return content
-
-        # ---------------------------------------------------------
-        # 1. Resolve original video bytes
-        # ---------------------------------------------------------
 
         try:
             video_bytes = await self.content_resolver.resolve(
@@ -446,10 +481,6 @@ class ContentEnrichmentService:
                 content,
                 exc,
             )
-
-        # ---------------------------------------------------------
-        # 2. Retrieve VideoInfo produced by the video processor
-        # ---------------------------------------------------------
 
         video_info = self._get_video_info(
             content
@@ -466,10 +497,6 @@ class ContentEnrichmentService:
                 error_type="MissingVideoInfo",
             )
 
-        # ---------------------------------------------------------
-        # 3. Build VideoASRRequest
-        # ---------------------------------------------------------
-
         video_asr_request = VideoASRRequest(
             language=self._get_video_asr_language(
                 request
@@ -484,10 +511,6 @@ class ContentEnrichmentService:
                 "mime_type": request.mime_type,
             },
         )
-
-        # ---------------------------------------------------------
-        # 4. Invoke VideoASRService
-        # ---------------------------------------------------------
 
         try:
             video_asr_result = (
@@ -510,18 +533,10 @@ class ContentEnrichmentService:
                 error=str(exc),
             )
 
-        # ---------------------------------------------------------
-        # 5. Preserve structured video ASR metadata
-        # ---------------------------------------------------------
-
         enriched = self._apply_video_asr_metadata(
             content=content,
             result=video_asr_result,
         )
-
-        # ---------------------------------------------------------
-        # 6. Reuse existing ASR result mapper
-        # ---------------------------------------------------------
 
         if (
             video_asr_result.asr_result is None
@@ -531,6 +546,422 @@ class ContentEnrichmentService:
         return self._apply_asr_result(
             content=enriched,
             result=video_asr_result.asr_result,
+        )
+
+    # =========================================================
+    # VIDEO -> VISION
+    # =========================================================
+
+    async def _enrich_video_vision(
+        self,
+        *,
+        request: IngestionRequest,
+        content: ExtractedContent,
+    ) -> ExtractedContent:
+        """
+        Perform visual analysis over extracted video frames.
+
+        The workflow is:
+
+            video bytes
+                ->
+            VideoInfo
+                ->
+            VideoVisionService
+                ->
+            VisionResult
+                ->
+            visual ContentBlocks
+
+        Visual analysis is non-fatal. The original VIDEO block
+        and all previously generated enrichment remain intact
+        when vision processing fails.
+        """
+
+        try:
+            video_bytes = await self.content_resolver.resolve(
+                request
+            )
+
+        except Exception as exc:
+            return self._record_video_vision_resolution_failure(
+                content,
+                exc,
+            )
+
+        video_info = self._get_video_info(
+            content
+        )
+
+        if video_info is None:
+            return self._record_video_vision_failure(
+                content=content,
+                status=VisionStatus.FAILED,
+                reason=(
+                    "VideoInfo was not available from "
+                    "the video processing stage."
+                ),
+                error_type="MissingVideoInfo",
+            )
+
+        vision_request = self._build_video_vision_request(
+            request
+        )
+
+        try:
+            vision_result = (
+                await self.video_vision_service.analyze(
+                    video_bytes,
+                    video_info=video_info,
+                    vision_request=vision_request,
+                )
+            )
+
+        except Exception as exc:
+            return self._record_video_vision_failure(
+                content=content,
+                status=VisionStatus.FAILED,
+                reason=(
+                    "Video vision processing failed."
+                ),
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+
+        enriched = self._apply_video_vision_metadata(
+            content=content,
+            result=vision_result,
+        )
+
+        return self._apply_video_vision_observations(
+            content=enriched,
+            result=vision_result,
+        )
+
+    @staticmethod
+    def _build_video_vision_request(
+        request: IngestionRequest,
+    ) -> VisionRequest:
+        """
+        Build the provider-independent vision request.
+
+        The request metadata supports optional operator controls
+        without coupling the enrichment layer to a specific
+        vision provider.
+        """
+
+        prompt = request.metadata.get(
+            "vision_prompt"
+        )
+
+        if prompt is not None:
+            prompt = str(prompt).strip()
+
+            if not prompt:
+                prompt = None
+
+        detail_level = request.metadata.get(
+            "vision_detail_level",
+            "standard",
+        )
+
+        if detail_level is None:
+            detail_level = "standard"
+
+        detail_level = str(
+            detail_level
+        )
+
+        max_observations = request.metadata.get(
+            "vision_max_observations"
+        )
+
+        if max_observations is not None:
+            try:
+                max_observations = int(
+                    max_observations
+                )
+            except (
+                TypeError,
+                ValueError,
+            ):
+                max_observations = None
+
+        return VisionRequest(
+            prompt=prompt,
+            detail_level=detail_level,
+            max_observations=max_observations,
+            metadata={
+                "source_id": (
+                    str(request.source_id)
+                    if request.source_id is not None
+                    else None
+                ),
+                "filename": request.filename,
+                "mime_type": request.mime_type,
+            },
+        )
+
+    @staticmethod
+    def _apply_video_vision_metadata(
+        *,
+        content: ExtractedContent,
+        result: VisionResult,
+    ) -> ExtractedContent:
+        """
+        Preserve structured video-vision execution metadata.
+
+        Provider and orchestration metadata are retained rather
+        than flattened into the canonical text.
+        """
+
+        metadata = deepcopy(
+            content.metadata
+        )
+
+        metadata["video_vision"] = {
+            "status": result.status.value,
+            "requested_frames": (
+                result.requested_frames
+            ),
+            "processed_frames": (
+                result.processed_frames
+            ),
+            "failed_frames": (
+                result.failed_frames
+            ),
+            "errors": list(
+                result.errors
+            ),
+            **deepcopy(
+                result.metadata
+            ),
+        }
+
+        return content.model_copy(
+            update={
+                "metadata": metadata,
+            }
+        )
+
+    @staticmethod
+    def _apply_video_vision_observations(
+        *,
+        content: ExtractedContent,
+        result: VisionResult,
+    ) -> ExtractedContent:
+        """
+        Convert successful visual observations into textual
+        ContentBlock objects.
+
+        The original VIDEO block is preserved.
+
+        Each observation retains:
+        - timestamp
+        - frame index
+        - objects
+        - entities
+        - actions
+        - scene
+        - visible text
+        - confidence
+        - provider metadata
+        """
+
+        if not result.observations:
+            return content
+
+        existing_blocks = list(
+            content.blocks
+        )
+
+        next_order = (
+            max(
+                (
+                    block.order
+                    for block in existing_blocks
+                ),
+                default=-1,
+            )
+            + 1
+        )
+
+        vision_blocks: list[
+            ContentBlock
+        ] = []
+
+        provider = result.metadata.get(
+            "provider"
+        )
+
+        for offset, observation in enumerate(
+            result.observations
+        ):
+            description = (
+                observation.description
+                or ""
+            ).strip()
+
+            if not description:
+                fallback_parts: list[str] = []
+
+                if observation.scene:
+                    fallback_parts.append(
+                        observation.scene
+                    )
+
+                if observation.visible_text:
+                    fallback_parts.append(
+                        (
+                            "Visible text: "
+                            + observation.visible_text
+                        )
+                    )
+
+                description = " ".join(
+                    fallback_parts
+                ).strip()
+
+            vision_blocks.append(
+                ContentBlock(
+                    block_type=(
+                        ContentBlockType.PARAGRAPH
+                    ),
+                    content=description,
+                    order=next_order + offset,
+                    start_time=(
+                        observation.timestamp_seconds
+                    ),
+                    end_time=(
+                        observation.timestamp_seconds
+                    ),
+                    metadata={
+                        "source": "vision",
+                        "provider": provider,
+                        "frame_index": (
+                            observation.frame_index
+                        ),
+                        "timestamp_seconds": (
+                            observation.timestamp_seconds
+                        ),
+                        "objects": list(
+                            observation.objects
+                        ),
+                        "entities": list(
+                            observation.entities
+                        ),
+                        "actions": list(
+                            observation.actions
+                        ),
+                        "scene": observation.scene,
+                        "visible_text": (
+                            observation.visible_text
+                        ),
+                        "confidence": (
+                            observation.confidence
+                        ),
+                        **deepcopy(
+                            observation.metadata
+                        ),
+                    },
+                )
+            )
+
+        combined_text_parts: list[str] = []
+
+        if content.text.strip():
+            combined_text_parts.append(
+                content.text.strip()
+            )
+
+        observation_text = "\n\n".join(
+            block.content
+            for block in vision_blocks
+            if block.content.strip()
+        )
+
+        if observation_text:
+            combined_text_parts.append(
+                observation_text
+            )
+
+        combined_text = "\n\n".join(
+            combined_text_parts
+        )
+
+        return content.model_copy(
+            update={
+                "text": combined_text,
+                "blocks": (
+                    existing_blocks
+                    + vision_blocks
+                ),
+            }
+        )
+
+    @staticmethod
+    def _record_video_vision_resolution_failure(
+        content: ExtractedContent,
+        error: Exception,
+    ) -> ExtractedContent:
+        """
+        Record video source-resolution failure without
+        discarding the original extracted content.
+        """
+
+        metadata = deepcopy(
+            content.metadata
+        )
+
+        metadata["video_vision"] = {
+            "status": "not_available",
+            "stage": "video_resolution",
+            "error_type": type(error).__name__,
+            "error": str(error),
+            "retryable": False,
+        }
+
+        return content.model_copy(
+            update={
+                "metadata": metadata,
+            }
+        )
+
+    @staticmethod
+    def _record_video_vision_failure(
+        *,
+        content: ExtractedContent,
+        status: VisionStatus,
+        reason: str,
+        error_type: str,
+        error: str | None = None,
+    ) -> ExtractedContent:
+        """
+        Record video vision failure without destroying
+        previously extracted or enriched content.
+        """
+
+        metadata = deepcopy(
+            content.metadata
+        )
+
+        failure_metadata: dict[str, object] = {
+            "status": status.value,
+            "stage": "video_vision",
+            "reason": reason,
+            "error_type": error_type,
+            "retryable": False,
+        }
+
+        if error is not None:
+            failure_metadata["error"] = error
+
+        metadata["video_vision"] = failure_metadata
+
+        return content.model_copy(
+            update={
+                "metadata": metadata,
+            }
         )
 
     # =========================================================

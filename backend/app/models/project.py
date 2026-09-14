@@ -1,3 +1,4 @@
+
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -12,6 +13,7 @@ from app.database.base import (
 )
 
 if TYPE_CHECKING:
+    from app.models.knowledge_document import KnowledgeDocument
     from app.models.source import Source
     from app.models.transformation import Transformation
     from app.models.user import User
@@ -50,6 +52,11 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     sources: Mapped[list["Source"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
+
+    knowledge_documents: Mapped[list["KnowledgeDocument"]] = relationship(
         back_populates="project",
         cascade="all, delete-orphan",
     )

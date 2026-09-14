@@ -1,3 +1,4 @@
+
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -12,6 +13,7 @@ from app.database.base import (
 )
 
 if TYPE_CHECKING:
+    from app.models.knowledge_document import KnowledgeDocument
     from app.models.project import Project
     from app.models.transformation import Transformation
 
@@ -60,11 +62,11 @@ class Source(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     source_metadata: Mapped[dict] = mapped_column(
-    "metadata",
-    JSONB,
-    nullable=False,
-    default=dict,
-)
+        "metadata",
+        JSONB,
+        nullable=False,
+        default=dict,
+    )
 
     status: Mapped[str] = mapped_column(
         String(50),
@@ -75,6 +77,11 @@ class Source(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     project: Mapped["Project"] = relationship(
         back_populates="sources",
+    )
+
+    knowledge_documents: Mapped[list["KnowledgeDocument"]] = relationship(
+        back_populates="source",
+        cascade="all, delete-orphan",
     )
 
     transformations: Mapped[list["Transformation"]] = relationship(

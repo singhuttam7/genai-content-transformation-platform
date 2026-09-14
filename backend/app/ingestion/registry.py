@@ -20,7 +20,7 @@ from app.storage.dependencies import (
 from app.ingestion.video.processor import (
     VideoDocumentProcessor,
 )
-
+from app.ingestion.parsers.html import HTMLDocumentProcessor
 
 def create_processor_router() -> ProcessorRouter:
     """
@@ -85,7 +85,7 @@ def create_processor_router() -> ProcessorRouter:
         DOCXProcessor(
             resolver=resolver,
         ),
-
+        HTMLDocumentProcessor(),
         # -----------------------------------------------------
         # Image
         # -----------------------------------------------------

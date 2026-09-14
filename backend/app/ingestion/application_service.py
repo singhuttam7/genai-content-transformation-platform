@@ -28,6 +28,22 @@ from app.ingestion.speech.provider import (
     ASRProvider,
 )
 
+from app.ingestion.video.asr import (
+    VideoASRService,
+)
+
+from app.ingestion.video.ffmpeg import (
+    FFmpegAudioExtractor,
+)
+
+from app.ingestion.video.vision_dependencies import (
+    get_vision_service,
+)
+
+from app.ingestion.video.vision_orchestration import (
+    VideoVisionService,
+)
+
 from app.ingestion.results import (
     IngestionResult,
 )
@@ -69,6 +85,8 @@ class IngestionApplicationService:
     - Resolve content for downstream processing.
     - Configure OCR enrichment.
     - Configure ASR enrichment.
+    - Configure video ASR enrichment.
+    - Configure video Vision enrichment.
     - Execute the ingestion pipeline.
     - Maintain source lifecycle state.
     - Compensate storage when database persistence fails.
@@ -85,9 +103,19 @@ class IngestionApplicationService:
               │      ↑
               │   OCR Factory
               │
-              └── ASRProvider
-                     ↑
-                  ASR Factory
+              ├── ASRProvider
+              │      ↑
+              │   ASR Factory
+              │
+              ├── VideoASRService
+              │      ├── FFmpegAudioExtractor
+              │      └── ASRProvider
+              │
+              └── VideoVisionService
+                     ├── FFmpegFrameExtractor
+                     └── VisionService
+                            ↑
+                       Vision Factory
               ↓
         IngestionPipeline
     """
@@ -101,6 +129,8 @@ class IngestionApplicationService:
         content_resolver: InputContentResolver | None = None,
         ocr_provider: OCRProvider | None = None,
         asr_provider: ASRProvider | None = None,
+        video_asr_service: VideoASRService | None = None,
+        video_vision_service: VideoVisionService | None = None,
     ) -> None:
         self.session = session
         self.storage = storage
@@ -163,6 +193,41 @@ class IngestionApplicationService:
         )
 
         # =====================================================
+        # Video ASR service
+        #
+        # Production default:
+        # FFmpeg audio extraction + configured ASR provider.
+        #
+        # Tests can inject a fake VideoASRService.
+        # =====================================================
+
+        self.video_asr_service = (
+            video_asr_service
+            if video_asr_service is not None
+            else VideoASRService(
+                audio_extractor=FFmpegAudioExtractor(),
+                asr_provider=self.asr_provider,
+            )
+        )
+
+        # =====================================================
+        # Video Vision service
+        #
+        # Production default:
+        # FFmpeg frame extraction + configured VisionService.
+        #
+        # Tests can inject a fake VideoVisionService.
+        # =====================================================
+
+        self.video_vision_service = (
+            video_vision_service
+            if video_vision_service is not None
+            else VideoVisionService(
+                vision_service=get_vision_service(),
+            )
+        )
+
+        # =====================================================
         # Ingestion pipeline
         # =====================================================
 
@@ -170,6 +235,8 @@ class IngestionApplicationService:
             content_resolver=self.content_resolver,
             ocr_provider=self.ocr_provider,
             asr_provider=self.asr_provider,
+            video_asr_service=self.video_asr_service,
+            video_vision_service=self.video_vision_service,
         )
 
         # =====================================================

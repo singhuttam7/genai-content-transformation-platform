@@ -1,6 +1,11 @@
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.models.knowledge_chunk_embedding import KnowledgeChunkEmbedding
+
 from sqlalchemy import ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -64,3 +69,9 @@ class KnowledgeChunk(
     document: Mapped["KnowledgeDocument"] = relationship(
         back_populates="chunks",
     )
+
+    embeddings: Mapped[list["KnowledgeChunkEmbedding"]] = relationship(
+    "KnowledgeChunkEmbedding",
+    back_populates="chunk",
+    cascade="all, delete-orphan",
+)

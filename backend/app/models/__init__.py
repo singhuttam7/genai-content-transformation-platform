@@ -7,7 +7,7 @@ from app.models.source import Source
 from app.models.transformation import Transformation
 from app.models.user import User
 from app.models.workflow import Workflow
-
+from app.models.knowledge_chunk_embedding import KnowledgeChunkEmbedding
 __all__ = [
     "Artifact",
     "Execution",
@@ -18,4 +18,5 @@ __all__ = [
     "Transformation",
     "User",
     "Workflow",
+    "KnowledgeChunkEmbedding",
 ]

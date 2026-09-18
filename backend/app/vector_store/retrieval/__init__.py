@@ -9,11 +9,12 @@ from app.vector_store.retrieval.schemas import (
     VectorRetrievalRequest,
     VectorRetrievalResult,
 )
-
+from app.vector_store.retrieval.service import VectorRetrievalService
 __all__ = [
     "PostgresVectorRetrieval",
     "VectorRetrievalMatch",
     "VectorRetrievalPort",
     "VectorRetrievalRequest",
     "VectorRetrievalResult",
+    "VectorRetrievalService",
 ]

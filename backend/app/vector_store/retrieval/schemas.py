@@ -54,10 +54,17 @@ class VectorRetrievalMatch(BaseModel):
     )
 
     chunk_id: UUID
+    text: str = Field(min_length=1)
     similarity: float
     model: EmbeddingModelInfo
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("text")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("text cannot be blank.")
+        return value
 
 class VectorRetrievalResult(BaseModel):
     """Result of a semantic vector retrieval operation."""

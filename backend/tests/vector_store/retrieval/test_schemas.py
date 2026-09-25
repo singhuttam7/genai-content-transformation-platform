@@ -106,27 +106,49 @@ class TestVectorRetrievalMatch:
 
         match = VectorRetrievalMatch(
             chunk_id=chunk_id,
+            text="Retrieved knowledge content.",
             similarity=0.91,
             model=build_model_info(),
             metadata={"chunk_index": 2},
         )
 
         assert match.chunk_id == chunk_id
+        assert match.text == "Retrieved knowledge content."
         assert match.similarity == 0.91
         assert match.metadata == {"chunk_index": 2}
 
     def test_default_metadata(self):
         match = VectorRetrievalMatch(
             chunk_id=uuid4(),
+            text="Retrieved knowledge content.",
             similarity=0.5,
             model=build_model_info(),
         )
 
+        assert match.text == "Retrieved knowledge content."
         assert match.metadata == {}
+
+    def test_text_is_required(self):
+        with pytest.raises(ValidationError):
+            VectorRetrievalMatch(
+                chunk_id=uuid4(),
+                similarity=0.5,
+                model=build_model_info(),
+            )
+
+    def test_blank_text_rejected(self):
+        with pytest.raises(ValidationError):
+            VectorRetrievalMatch(
+                chunk_id=uuid4(),
+                text="   ",
+                similarity=0.5,
+                model=build_model_info(),
+            )
 
     def test_match_is_immutable(self):
         match = VectorRetrievalMatch(
             chunk_id=uuid4(),
+            text="Retrieved knowledge content.",
             similarity=0.5,
             model=build_model_info(),
         )
@@ -139,6 +161,7 @@ class TestVectorRetrievalResult:
     def test_valid_result(self):
         match = VectorRetrievalMatch(
             chunk_id=uuid4(),
+            text="Retrieved knowledge content.",
             similarity=0.92,
             model=build_model_info(),
         )

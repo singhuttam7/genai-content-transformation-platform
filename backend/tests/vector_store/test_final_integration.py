@@ -415,13 +415,14 @@ def test_retrieval_result_preserves_model_identity():
     chunk_id = uuid4()
 
     match = VectorRetrievalMatch(
-        chunk_id=chunk_id,
-        similarity=0.95,
-        model=model,
-        metadata={
-            "source": "integration-test",
-        },
-    )
+    chunk_id=chunk_id,
+    text="Integration test retrieval content.",
+    similarity=0.95,
+    model=model,
+    metadata={
+        "source": "integration-test",
+    },
+)
 
     result = VectorRetrievalResult(
         matches=[match],

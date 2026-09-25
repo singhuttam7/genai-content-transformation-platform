@@ -228,6 +228,7 @@ class PostgresVectorRetrieval(VectorRetrievalPort):
 
         return VectorRetrievalMatch(
             chunk_id=chunk.id,
+            text=chunk.text,
             similarity=float(similarity_score),
             model=model,
             metadata=metadata,

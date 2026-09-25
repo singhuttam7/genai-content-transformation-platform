@@ -54,6 +54,7 @@ def make_result(
         matches=[
             VectorRetrievalMatch(
                 chunk_id=uuid4(),
+                text="Retrieved test knowledge content.",
                 similarity=0.95,
                 model=request.model,
                 metadata={"section": "test"},

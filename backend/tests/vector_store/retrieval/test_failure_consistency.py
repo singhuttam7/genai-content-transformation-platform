@@ -70,6 +70,7 @@ class SuccessfulRetrievalPort(VectorRetrievalPort):
 
         match = VectorRetrievalMatch(
             chunk_id=uuid4(),
+            text="Retrieved test knowledge content.",
             similarity=1.0,
             model=request.model,
             metadata={},

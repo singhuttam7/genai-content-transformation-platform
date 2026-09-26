@@ -1,5 +1,11 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
 
+from app.api.errors import (
+    http_exception_handler,
+    request_validation_exception_handler,
+    unhandled_exception_handler,
+)
 from app.api.router import api_router
 from app.core.config import settings
 
@@ -11,6 +17,21 @@ app = FastAPI(
         "multimodal source content into communication artifacts."
     ),
     version=settings.app_version,
+)
+
+app.add_exception_handler(
+    RequestValidationError,
+    request_validation_exception_handler,
+)
+
+app.add_exception_handler(
+    HTTPException,
+    http_exception_handler,
+)
+
+app.add_exception_handler(
+    Exception,
+    unhandled_exception_handler,
 )
 
 app.include_router(

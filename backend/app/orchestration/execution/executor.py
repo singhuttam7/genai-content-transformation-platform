@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from uuid import UUID, uuid4
 
 from app.agents.base import (
     AgentPort,
@@ -28,6 +29,7 @@ class WorkflowExecutor:
     - resolve agents from AgentRegistry;
     - execute workflow steps sequentially;
     - maintain AgentState;
+    - preserve the workflow execution identifier;
     - record every agent execution attempt;
     - apply workflow-level failure/recovery policy;
     - stop deterministically when recovery is exhausted.
@@ -45,7 +47,10 @@ class WorkflowExecutor:
         agent_registry: AgentRegistry,
         failure_policy: WorkflowFailurePolicy | None = None,
     ) -> None:
-        if not isinstance(agent_registry, AgentRegistry):
+        if not isinstance(
+            agent_registry,
+            AgentRegistry,
+        ):
             raise TypeError(
                 "agent_registry must be an AgentRegistry."
             )
@@ -76,22 +81,40 @@ class WorkflowExecutor:
     async def execute(
         self,
         request: WorkflowRequest,
+        *,
+        execution_id: UUID | None = None,
     ) -> WorkflowResult:
         """
         Execute all workflow steps in declared order.
+
+        When execution_id is supplied by the persistence layer, the same
+        identifier is preserved inside AgentState. Otherwise a new
+        workflow execution identifier is generated.
         """
 
-        if not isinstance(request, WorkflowRequest):
+        if not isinstance(
+            request,
+            WorkflowRequest,
+        ):
             raise TypeError(
                 "request must be a WorkflowRequest."
             )
 
+        resolved_execution_id = (
+            execution_id
+            if execution_id is not None
+            else uuid4()
+        )
+
         state = AgentState(
+            execution_id=resolved_execution_id,
             status=AgentStatus.PENDING,
             metadata=dict(request.metadata),
         )
 
-        state.set_status(AgentStatus.RUNNING)
+        state.set_status(
+            AgentStatus.RUNNING,
+        )
 
         current_input = request.input
         final_output = None
@@ -122,6 +145,13 @@ class WorkflowExecutor:
             if result.status != AgentStatus.COMPLETED:
                 state.set_status(
                     result.status,
+                )
+
+                # A cancelled workflow must retain the agent that was
+                # executing when cancellation occurred. Failed workflows
+                # also retain the failed agent for execution diagnostics.
+                state.set_current_agent(
+                    step.agent_name,
                 )
 
                 return WorkflowResult(
@@ -220,6 +250,11 @@ class WorkflowExecutor:
                     timezone.utc,
                 )
 
+                # Explicitly preserve the agent that was cancelled.
+                state.set_current_agent(
+                    step.agent_name,
+                )
+
                 state.add_step(
                     AgentStep(
                         agent_name=step.agent_name,
@@ -307,6 +342,9 @@ class WorkflowExecutor:
                 return result
 
             if result.status == AgentStatus.CANCELLED:
+                state.set_current_agent(
+                    step.agent_name,
+                )
                 return result
 
             if not self._should_retry(

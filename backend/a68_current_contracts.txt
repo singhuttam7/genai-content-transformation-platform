@@ -1,0 +1,505 @@
+﻿===== app\models_ai\llm\errors.py =====
+from __future__ import annotations
+
+
+class LLMError(Exception):
+    """Base exception for all provider-independent LLM failures."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str | None = None,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message)
+
+        self.provider = provider
+        self.retryable = retryable
+
+
+class LLMConfigurationError(LLMError):
+    """Raised when the LLM configuration is invalid."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str | None = None,
+    ) -> None:
+        super().__init__(
+            message,
+            provider=provider,
+            retryable=False,
+        )
+
+
+class LLMAuthenticationError(LLMError):
+    """Raised when authentication with an LLM provider fails."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str | None = None,
+    ) -> None:
+        super().__init__(
+            message,
+            provider=provider,
+            retryable=False,
+        )
+
+
+class LLMRateLimitError(LLMError):
+    """Raised when an LLM provider rate limit is exceeded."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str | None = None,
+    ) -> None:
+        super().__init__(
+            message,
+            provider=provider,
+            retryable=True,
+        )
+
+
+class LLMTimeoutError(LLMError):
+    """Raised when an LLM request exceeds its timeout."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str | None = None,
+    ) -> None:
+        super().__init__(
+            message,
+            provider=provider,
+            retryable=True,
+        )
+
+
+class LLMProviderError(LLMError):
+    """Raised for provider-side failures that are not more specific."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str | None = None,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(
+            message,
+            provider=provider,
+            retryable=retryable,
+        )
+
+
+class LLMResponseError(LLMError):
+    """Raised when a provider returns an invalid or unusable response."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str | None = None,
+    ) -> None:
+        super().__init__(
+            message,
+            provider=provider,
+            retryable=False,
+        )
+
+
+class LLMStructuredOutputError(LLMResponseError):
+    """
+    Raised when an LLM response cannot be decoded or validated
+    as the requested structured output.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str | None = None,
+    ) -> None:
+        super().__init__(
+            message,
+            provider=provider,
+        )
+
+===== app\models_ai\gateway.py =====
+from __future__ import annotations
+
+from typing import TypeVar
+
+from pydantic import BaseModel
+
+from app.models_ai.llm.errors import (
+    LLMResponseError,
+    LLMStructuredOutputError,
+)
+from app.models_ai.llm.port import LLMPort
+from app.models_ai.llm.schemas import (
+    LLMRequest,
+    LLMResponse,
+)
+from app.models_ai.llm.structured import StructuredOutputParser
+
+
+StructuredModelT = TypeVar(
+    "StructuredModelT",
+    bound=BaseModel,
+)
+
+
+class LLMGateway:
+    """
+    Application-facing gateway for provider-independent LLM generation.
+
+    The gateway depends only on LLMPort and therefore remains
+    independent of any concrete LLM provider.
+    """
+
+    def __init__(
+        self,
+        port: LLMPort,
+    ) -> None:
+        self._port = port
+
+    async def generate(
+        self,
+        request: LLMRequest,
+    ) -> LLMResponse:
+        """
+        Generate an LLM response through the configured port.
+
+        Provider-independent LLM errors are propagated unchanged.
+        Unexpected provider responses are converted into
+        LLMResponseError.
+        """
+
+        response = await self._port.generate(request)
+
+        if not isinstance(response, LLMResponse):
+            provider = request.model.provider
+
+            raise LLMResponseError(
+                "LLM provider returned an invalid response type.",
+                provider=provider,
+            )
+
+        return response
+
+    async def generate_structured(
+        self,
+        request: LLMRequest,
+        response_model: type[StructuredModelT],
+    ) -> StructuredModelT:
+        """
+        Generate an LLM response and validate it as a Pydantic model.
+
+        The provider remains responsible only for text generation.
+        JSON decoding and schema validation happen at the gateway
+        boundary in a provider-independent manner.
+        """
+
+        response = await self.generate(request)
+
+        try:
+            return StructuredOutputParser.parse(
+                text=response.text,
+                response_model=response_model,
+            )
+        except ValueError as exc:
+            raise LLMStructuredOutputError(
+                str(exc),
+                provider=request.model.provider,
+            ) from exc
+
+===== app\models_ai\llm\port.py =====
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+
+from app.models_ai.llm.schemas import (
+    LLMRequest,
+    LLMResponse,
+)
+
+
+class LLMPort(ABC):
+    """
+    Provider-independent interface for LLM generation.
+
+    Concrete provider adapters must implement this interface.
+    """
+
+    @abstractmethod
+    async def generate(
+        self,
+        request: LLMRequest,
+    ) -> LLMResponse:
+        """
+        Generate a response for the supplied LLM request.
+
+        Implementations must translate provider-specific behavior
+        into the provider-independent LLMRequest/LLMResponse contracts.
+        """
+
+        raise NotImplementedError
+
+===== app\models_ai\providers\groq.py =====
+from __future__ import annotations
+
+from typing import Any
+
+from groq import AsyncGroq
+
+from app.models_ai.llm.errors import (
+    LLMAuthenticationError,
+    LLMConfigurationError,
+    LLMProviderError,
+    LLMRateLimitError,
+    LLMResponseError,
+    LLMTimeoutError,
+)
+from app.models_ai.llm.schemas import (
+    LLMMessage,
+    LLMRequest,
+    LLMResponse,
+    LLMUsage,
+)
+from app.models_ai.providers.base import LLMProviderAdapter
+from app.models_ai.providers.schemas import LLMProviderConfig
+
+
+class GroqLLMAdapter(LLMProviderAdapter):
+    """
+    Groq implementation of the provider-independent LLMPort.
+
+    The adapter translates the platform's LLM contracts into Groq's
+    chat-completions API and translates provider failures back into
+    provider-independent LLM errors.
+    """
+
+    def __init__(
+        self,
+        config: LLMProviderConfig,
+        *,
+        client: AsyncGroq | None = None,
+    ) -> None:
+        if config.provider != "groq":
+            raise LLMConfigurationError(
+                "Groq adapter requires provider='groq'.",
+                provider="groq",
+            )
+
+        if client is None and config.api_key is None:
+            raise LLMConfigurationError(
+                "Groq API key is required when no client is supplied.",
+                provider="groq",
+            )
+
+        super().__init__(config)
+
+        self._client = client or AsyncGroq(
+            api_key=config.api_key,
+            base_url=config.base_url,
+            timeout=config.timeout_seconds,
+        )
+
+    @property
+    def client(self) -> AsyncGroq:
+        """Return the configured Groq client."""
+
+        return self._client
+
+    async def generate(
+        self,
+        request: LLMRequest,
+    ) -> LLMResponse:
+        """
+        Generate a response using Groq chat completions.
+        """
+
+        self.validate_request(request)
+
+        try:
+            completion = await self._client.chat.completions.create(
+                model=request.model.model_name,
+                messages=self._build_messages(request.messages),
+                temperature=request.temperature,
+                max_tokens=request.max_tokens,
+            )
+        except Exception as exc:
+            raise self._translate_exception(exc) from exc
+
+        return self._build_response(
+            request=request,
+            completion=completion,
+        )
+
+    @staticmethod
+    def _build_messages(
+        messages: list[LLMMessage],
+    ) -> list[dict[str, str]]:
+        """Convert platform messages into Groq chat messages."""
+
+        return [
+            {
+                "role": message.role,
+                "content": message.content,
+            }
+            for message in messages
+        ]
+
+    def _build_response(
+        self,
+        request: LLMRequest,
+        completion: Any,
+    ) -> LLMResponse:
+        """Convert a Groq completion into the platform response contract."""
+
+        if not completion.choices:
+            raise LLMResponseError(
+                "Groq returned no completion choices.",
+                provider="groq",
+            )
+
+        choice = completion.choices[0]
+
+        if choice.message is None:
+            raise LLMResponseError(
+                "Groq returned a completion without a message.",
+                provider="groq",
+            )
+
+        text = choice.message.content
+
+        if not isinstance(text, str) or not text.strip():
+            raise LLMResponseError(
+                "Groq returned an empty response.",
+                provider="groq",
+            )
+
+        usage = self._build_usage(
+            getattr(completion, "usage", None),
+        )
+
+        return LLMResponse(
+            text=text,
+            model=request.model,
+            usage=usage,
+            finish_reason=getattr(
+                choice,
+                "finish_reason",
+                None,
+            ),
+            metadata={
+                "provider": "groq",
+                "completion_id": getattr(
+                    completion,
+                    "id",
+                    None,
+                ),
+            },
+        )
+
+    @staticmethod
+    def _build_usage(
+        usage: Any,
+    ) -> LLMUsage | None:
+        """Convert provider usage information into LLMUsage."""
+
+        if usage is None:
+            return None
+
+        prompt_tokens = getattr(
+            usage,
+            "prompt_tokens",
+            None,
+        )
+
+        completion_tokens = getattr(
+            usage,
+            "completion_tokens",
+            None,
+        )
+
+        total_tokens = getattr(
+            usage,
+            "total_tokens",
+            None,
+        )
+
+        if (
+            prompt_tokens is None
+            and completion_tokens is None
+            and total_tokens is None
+        ):
+            return None
+
+        return LLMUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+        )
+
+    @staticmethod
+    def _translate_exception(
+        exc: Exception,
+    ) -> Exception:
+        """
+        Translate Groq/HTTP failures into provider-independent errors.
+
+        The SDK's concrete exception hierarchy can evolve, so translation
+        uses the stable HTTP/status attributes where available and falls
+        back to the provider error category.
+        """
+
+        status_code = getattr(
+            exc,
+            "status_code",
+            None,
+        )
+
+        if status_code == 401:
+            return LLMAuthenticationError(
+                "Groq authentication failed.",
+                provider="groq",
+            )
+
+        if status_code == 429:
+            return LLMRateLimitError(
+                "Groq rate limit exceeded.",
+                provider="groq",
+            )
+
+        if status_code is not None and status_code >= 500:
+            return LLMProviderError(
+                "Groq provider returned a server error.",
+                provider="groq",
+                retryable=True,
+            )
+
+        if isinstance(exc, TimeoutError):
+            return LLMTimeoutError(
+                "Groq request timed out.",
+                provider="groq",
+            )
+
+        if isinstance(exc, ValueError):
+            return LLMConfigurationError(
+                str(exc) or "Invalid Groq request configuration.",
+                provider="groq",
+            )
+
+        return LLMProviderError(
+            str(exc) or "Groq provider request failed.",
+            provider="groq",
+        )

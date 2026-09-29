@@ -297,6 +297,10 @@ async def test_create_execution_rejects_missing_transformation():
         get_db_session
     ] = lambda: db
 
+    app.dependency_overrides[
+        get_workflow_executor
+    ] = make_executor
+
     try:
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -330,6 +334,11 @@ async def test_create_execution_rejects_missing_transformation():
             None,
         )
 
+        app.dependency_overrides.pop(
+            get_workflow_executor,
+            None,
+        )
+
 
 @pytest.mark.asyncio
 async def test_create_execution_rejects_missing_workflow():
@@ -344,6 +353,10 @@ async def test_create_execution_rejects_missing_workflow():
     app.dependency_overrides[
         get_db_session
     ] = lambda: db
+
+    app.dependency_overrides[
+        get_workflow_executor
+    ] = make_executor
 
     try:
         async with AsyncClient(
@@ -378,6 +391,11 @@ async def test_create_execution_rejects_missing_workflow():
             None,
         )
 
+        app.dependency_overrides.pop(
+            get_workflow_executor,
+            None,
+        )
+
 
 @pytest.mark.asyncio
 async def test_create_execution_rejects_project_mismatch():
@@ -398,6 +416,10 @@ async def test_create_execution_rejects_project_mismatch():
     app.dependency_overrides[
         get_db_session
     ] = lambda: db
+
+    app.dependency_overrides[
+        get_workflow_executor
+    ] = make_executor
 
     try:
         async with AsyncClient(
@@ -433,6 +455,11 @@ async def test_create_execution_rejects_project_mismatch():
             None,
         )
 
+        app.dependency_overrides.pop(
+            get_workflow_executor,
+            None,
+        )
+
 
 @pytest.mark.asyncio
 async def test_create_execution_rejects_inactive_workflow():
@@ -453,6 +480,10 @@ async def test_create_execution_rejects_inactive_workflow():
     app.dependency_overrides[
         get_db_session
     ] = lambda: db
+
+    app.dependency_overrides[
+        get_workflow_executor
+    ] = make_executor
 
     try:
         async with AsyncClient(
@@ -484,6 +515,11 @@ async def test_create_execution_rejects_inactive_workflow():
     finally:
         app.dependency_overrides.pop(
             get_db_session,
+            None,
+        )
+
+        app.dependency_overrides.pop(
+            get_workflow_executor,
             None,
         )
 

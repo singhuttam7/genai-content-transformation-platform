@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -15,6 +16,7 @@ from app.agents.base import (
 from app.agents.base.contracts import AgentRequest
 from app.agents.base.port import AgentPort
 from app.api.dependencies import (
+    get_artifact_persistence_service,
     get_db_session,
     get_rag_retrieval_service,
     get_workflow_executor,
@@ -129,7 +131,8 @@ class IntegrationDB:
                 value.__class__.__name__
                 == "Artifact"
             ):
-                self.artifacts.append(value)
+                if value not in self.artifacts:
+                    self.artifacts.append(value)
 
     async def refresh(self, value):
         now = datetime.now(timezone.utc)
@@ -138,6 +141,65 @@ class IntegrationDB:
             value.created_at = now
 
         value.updated_at = now
+
+
+class FakeArtifactPersistenceService:
+    """
+    Lightweight artifact persistence service for integration tests.
+
+    The production ArtifactPersistenceService requires a real
+    AsyncSession. These integration tests intentionally use
+    IntegrationDB, so the real service must be overridden here.
+    """
+
+    def __init__(self, db: IntegrationDB) -> None:
+        self.db = db
+
+    async def persist(
+        self,
+        *,
+        envelope,
+        transformation_id,
+        execution_id,
+        status="GENERATED",
+        storage_uri=None,
+    ):
+        content = envelope.content
+
+        if isinstance(content, str):
+            normalized_content = content
+        else:
+            import json
+
+            normalized_content = json.dumps(
+                content,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+
+        content_hash = hashlib.sha256(
+            normalized_content.encode("utf-8")
+        ).hexdigest()
+
+        artifact = SimpleNamespace(
+            id=uuid4(),
+            transformation_id=transformation_id,
+            execution_id=execution_id,
+            artifact_type=envelope.artifact_type,
+            title=envelope.title,
+            content=normalized_content,
+            storage_uri=storage_uri,
+            content_hash=content_hash,
+            artifact_metadata=envelope.metadata or {},
+            status=status,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+
+        self.db.add(artifact)
+
+        return artifact
 
 
 class IntegrationAgent(AgentPort):
@@ -334,6 +396,10 @@ async def test_execution_and_artifact_api_lifecycle():
         get_db_session
     ] = lambda: db
 
+    app.dependency_overrides[
+        get_artifact_persistence_service
+    ] = lambda: FakeArtifactPersistenceService(db)
+
     try:
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -392,6 +458,11 @@ async def test_execution_and_artifact_api_lifecycle():
         )
 
     finally:
+        app.dependency_overrides.pop(
+            get_artifact_persistence_service,
+            None,
+        )
+
         app.dependency_overrides.pop(
             get_db_session,
             None,

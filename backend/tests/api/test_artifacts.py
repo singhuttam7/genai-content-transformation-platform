@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -8,7 +9,10 @@ from uuid import uuid4
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.api.dependencies import get_db_session
+from app.api.dependencies import (
+    get_artifact_persistence_service,
+    get_db_session,
+)
 from app.main import app
 
 
@@ -105,6 +109,56 @@ class FakeDB:
         value.updated_at = now
 
 
+class FakeArtifactPersistenceService:
+    def __init__(self, db: FakeDB) -> None:
+        self.db = db
+
+    async def persist(
+        self,
+        *,
+        envelope,
+        transformation_id,
+        execution_id,
+        status="GENERATED",
+        storage_uri=None,
+    ):
+        content = envelope.content
+
+        if isinstance(content, str):
+            normalized_content = content
+        else:
+            normalized_content = json.dumps(
+                content,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+
+        artifact = SimpleNamespace(
+            id=uuid4(),
+            transformation_id=transformation_id,
+            execution_id=execution_id,
+            artifact_type=envelope.artifact_type,
+            title=envelope.title,
+            content=normalized_content,
+            storage_uri=storage_uri,
+            content_hash=hashlib.sha256(
+                normalized_content.encode("utf-8")
+            ).hexdigest(),
+            artifact_metadata=envelope.metadata or {},
+            status=status,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+
+        self.db.add(artifact)
+
+        await self.db.commit()
+        await self.db.refresh(artifact)
+
+        return artifact
+
+
 def make_transformation(
     *,
     transformation_id,
@@ -168,6 +222,10 @@ async def test_create_artifact_returns_generated_artifact():
     app.dependency_overrides[
         get_db_session
     ] = lambda: db
+
+    app.dependency_overrides[
+        get_artifact_persistence_service
+    ] = lambda: FakeArtifactPersistenceService(db)
 
     try:
         async with AsyncClient(
@@ -248,6 +306,11 @@ async def test_create_artifact_returns_generated_artifact():
 
     finally:
         app.dependency_overrides.pop(
+            get_artifact_persistence_service,
+            None,
+        )
+
+        app.dependency_overrides.pop(
             get_db_session,
             None,
         )
@@ -263,6 +326,10 @@ async def test_create_artifact_rejects_missing_transformation():
     app.dependency_overrides[
         get_db_session
     ] = lambda: db
+
+    app.dependency_overrides[
+        get_artifact_persistence_service
+    ] = lambda: FakeArtifactPersistenceService(db)
 
     try:
         async with AsyncClient(
@@ -287,12 +354,19 @@ async def test_create_artifact_rejects_missing_transformation():
         body = response.json()
 
         assert body["error"]["code"] == "HTTP_404"
+
         assert body["error"]["message"] == (
             "Transformation not found."
         )
+
         assert body["error"]["details"] is None
 
     finally:
+        app.dependency_overrides.pop(
+            get_artifact_persistence_service,
+            None,
+        )
+
         app.dependency_overrides.pop(
             get_db_session,
             None,
@@ -313,6 +387,10 @@ async def test_create_artifact_rejects_missing_execution():
     app.dependency_overrides[
         get_db_session
     ] = lambda: db
+
+    app.dependency_overrides[
+        get_artifact_persistence_service
+    ] = lambda: FakeArtifactPersistenceService(db)
 
     try:
         async with AsyncClient(
@@ -337,12 +415,19 @@ async def test_create_artifact_rejects_missing_execution():
         body = response.json()
 
         assert body["error"]["code"] == "HTTP_404"
+
         assert body["error"]["message"] == (
             "Execution not found."
         )
+
         assert body["error"]["details"] is None
 
     finally:
+        app.dependency_overrides.pop(
+            get_artifact_persistence_service,
+            None,
+        )
+
         app.dependency_overrides.pop(
             get_db_session,
             None,
@@ -369,6 +454,10 @@ async def test_create_artifact_rejects_execution_from_different_transformation()
         get_db_session
     ] = lambda: db
 
+    app.dependency_overrides[
+        get_artifact_persistence_service
+    ] = lambda: FakeArtifactPersistenceService(db)
+
     try:
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -392,13 +481,20 @@ async def test_create_artifact_rejects_execution_from_different_transformation()
         body = response.json()
 
         assert body["error"]["code"] == "HTTP_422"
+
         assert body["error"]["message"] == (
             "Execution and transformation must "
             "refer to the same transformation."
         )
+
         assert body["error"]["details"] is None
 
     finally:
+        app.dependency_overrides.pop(
+            get_artifact_persistence_service,
+            None,
+        )
+
         app.dependency_overrides.pop(
             get_db_session,
             None,
@@ -512,7 +608,7 @@ async def test_artifact_get_unknown_returns_404():
 
     try:
         async with AsyncClient(
-            transport=ASGITransport(app=app),
+            transport=ASGITransport(app),
             base_url="http://test",
         ) as client:
             response = await client.get(
@@ -524,9 +620,11 @@ async def test_artifact_get_unknown_returns_404():
         body = response.json()
 
         assert body["error"]["code"] == "HTTP_404"
+
         assert body["error"]["message"] == (
             "Artifact not found."
         )
+
         assert body["error"]["details"] is None
 
     finally:
@@ -562,6 +660,10 @@ async def test_create_artifact_normalizes_structured_content():
     app.dependency_overrides[
         get_db_session
     ] = lambda: db
+
+    app.dependency_overrides[
+        get_artifact_persistence_service
+    ] = lambda: FakeArtifactPersistenceService(db)
 
     try:
         async with AsyncClient(
@@ -607,6 +709,11 @@ async def test_create_artifact_normalizes_structured_content():
 
     finally:
         app.dependency_overrides.pop(
+            get_artifact_persistence_service,
+            None,
+        )
+
+        app.dependency_overrides.pop(
             get_db_session,
             None,
         )
@@ -631,6 +738,10 @@ async def test_create_artifact_rejects_extra_request_fields():
         get_db_session
     ] = lambda: db
 
+    app.dependency_overrides[
+        get_artifact_persistence_service
+    ] = lambda: FakeArtifactPersistenceService(db)
+
     try:
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -653,6 +764,11 @@ async def test_create_artifact_rejects_extra_request_fields():
         assert response.status_code == 422
 
     finally:
+        app.dependency_overrides.pop(
+            get_artifact_persistence_service,
+            None,
+        )
+
         app.dependency_overrides.pop(
             get_db_session,
             None,

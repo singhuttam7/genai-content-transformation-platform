@@ -22,6 +22,7 @@ from app.schemas.execution import (
     ExecutionResponse,
 )
 
+
 router = APIRouter(
     prefix="/executions",
     tags=["Executions"],
@@ -65,7 +66,8 @@ async def create_execution(
 
     workflow_result = await db.execute(
         select(Workflow).where(
-            Workflow.id == request.workflow_id,
+            Workflow.id
+            == request.workflow_id,
         )
     )
 
@@ -107,7 +109,9 @@ async def create_execution(
     )
 
     db.add(execution)
+
     await db.commit()
+
     await db.refresh(execution)
 
     orchestration_service = ExecutionOrchestrationService(
@@ -140,7 +144,9 @@ async def list_executions(
         )
     )
 
-    items = list(result.scalars().all())
+    items = list(
+        result.scalars().all()
+    )
 
     total_result = await db.execute(
         select(func.count()).select_from(
@@ -168,7 +174,8 @@ async def get_execution(
 
     result = await db.execute(
         select(Execution).where(
-            Execution.id == execution_id,
+            Execution.id
+            == execution_id,
         )
     )
 

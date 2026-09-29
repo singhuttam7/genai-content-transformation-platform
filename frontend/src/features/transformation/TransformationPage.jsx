@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { useWorkspace } from "../../context/WorkspaceContext";
@@ -25,6 +25,37 @@ function getErrorMessage(error) {
   );
 }
 
+function getSourceTypeDefinition(sourceType) {
+  return sourceTypes.find((type) => type.value === sourceType);
+}
+
+function fileMatchesAccept(file, accept = "") {
+  if (!file || !accept) {
+    return true;
+  }
+
+  const fileName = file.name.toLowerCase();
+  const fileType = file.type.toLowerCase();
+
+  return accept.split(",").some((rule) => {
+    const normalizedRule = rule.trim().toLowerCase();
+
+    if (!normalizedRule) {
+      return false;
+    }
+
+    if (normalizedRule.startsWith(".")) {
+      return fileName.endsWith(normalizedRule);
+    }
+
+    if (normalizedRule.endsWith("/*")) {
+      return fileType.startsWith(normalizedRule.slice(0, -1));
+    }
+
+    return fileType === normalizedRule;
+  });
+}
+
 function TransformationPage() {
   const navigate = useNavigate();
 
@@ -35,21 +66,15 @@ function TransformationPage() {
   } = useWorkspace();
 
   const [createdSource, setCreatedSource] = useState(null);
-
   const [sourceCreating, setSourceCreating] = useState(false);
-
   const [sourceError, setSourceError] = useState(null);
 
   const [createdTransformation, setCreatedTransformation] = useState(null);
-
   const [transformationCreating, setTransformationCreating] = useState(false);
-
   const [transformationError, setTransformationError] = useState(null);
 
   const [createdExecution, setCreatedExecution] = useState(null);
-
   const [executionCreating, setExecutionCreating] = useState(false);
-
   const [executionError, setExecutionError] = useState(null);
 
   const [sourceType, setSourceType] = useState("text");
@@ -58,12 +83,24 @@ function TransformationPage() {
     useState("executive_summary");
 
   const [sourceTitle, setSourceTitle] = useState("");
-
   const [sourceContent, setSourceContent] = useState("");
-
   const [sourceUrl, setSourceUrl] = useState("");
-
   const [sourceFile, setSourceFile] = useState(null);
+  const [sourcePreviewUrl, setSourcePreviewUrl] = useState(null);
+
+  useEffect(() => {
+    if (!sourceFile || !["image", "audio", "video"].includes(sourceType)) {
+      setSourcePreviewUrl(null);
+      return undefined;
+    }
+
+    const objectUrl = URL.createObjectURL(sourceFile);
+    setSourcePreviewUrl(objectUrl);
+
+    return () => {
+      URL.revokeObjectURL(objectUrl);
+    };
+  }, [sourceFile, sourceType]);
 
   const [configuration, setConfiguration] = useState({
     objective: "",
@@ -114,17 +151,19 @@ function TransformationPage() {
       return;
     }
 
-    if (sourceType === "file" && !sourceFile) {
-      setSourceError("Please select a PDF file.");
+    const selectedSourceType = getSourceTypeDefinition(sourceType);
+
+    if (selectedSourceType?.kind === "file" && !sourceFile) {
+      setSourceError(`Please select a ${selectedSourceType.label} file.`);
       return;
     }
 
-    if (
-      sourceType !== "url" &&
-      sourceType !== "file" &&
-      !sourceContent.trim()
-    ) {
-      setSourceError("Please provide source content.");
+    if (selectedSourceType?.kind === "text" && !sourceContent.trim()) {
+      setSourceError(
+        sourceType === "prompt"
+          ? "Please provide a prompt."
+          : "Please provide source content.",
+      );
       return;
     }
 
@@ -264,6 +303,7 @@ function TransformationPage() {
   function handleSourceTypeChange(value) {
     setSourceType(value);
     setSourceFile(null);
+    setSourcePreviewUrl(null);
     resetSourceState();
   }
 
@@ -279,18 +319,24 @@ function TransformationPage() {
       return;
     }
 
-    const isPdf =
-      file.type === "application/pdf" ||
-      file.name.toLowerCase().endsWith(".pdf");
+    const selectedSourceType = getSourceTypeDefinition(sourceType);
 
-    if (!isPdf) {
+    if (selectedSourceType?.kind !== "file") {
       setSourceFile(null);
-      setSourceError("Please select a PDF file.");
+      setSourceError("This source type does not accept a file.");
       return;
     }
 
+    if (!fileMatchesAccept(file, selectedSourceType.accept)) {
+      setSourceFile(null);
+      setSourceError(`Please select a valid ${selectedSourceType.label} file.`);
+      return;
+    }
+
+    const fileTitle = file.name.replace(/\.[^.]+$/, "");
+
     setSourceTitle((currentTitle) =>
-      currentTitle.trim() ? currentTitle : file.name.replace(/\.pdf$/i, ""),
+      currentTitle.trim() ? currentTitle : fileTitle,
     );
   }
 
@@ -309,6 +355,7 @@ function TransformationPage() {
     resetDownstreamState();
   }
 
+  const selectedSourceType = getSourceTypeDefinition(sourceType);
   const executionCompleted = createdExecution?.status === "COMPLETED";
 
   return (
@@ -401,7 +448,7 @@ function TransformationPage() {
               </label>
 
               {sourceType === "url" ? (
-                <label className="form-field">
+                <label className="form-field form-field-full">
                   <span>Source URL</span>
 
                   <input
@@ -416,21 +463,47 @@ function TransformationPage() {
                     placeholder="https://example.com/article"
                   />
                 </label>
-              ) : sourceType === "file" ? (
+              ) : selectedSourceType?.kind === "file" ? (
                 <label className="form-field form-field-full">
-                  <span>PDF file</span>
+                  <span>{selectedSourceType.label} file</span>
 
                   <input
                     type="file"
-                    accept=".pdf,application/pdf"
+                    accept={selectedSourceType.accept}
                     onChange={handleSourceFileChange}
                   />
 
                   {sourceFile && (
-                    <span className="source-type-description">
-                      Selected: {sourceFile.name} (
-                      {(sourceFile.size / 1024).toFixed(1)} KB)
-                    </span>
+                    <>
+                      <span className="source-type-description">
+                        Selected: {sourceFile.name} (
+                        {(sourceFile.size / 1024).toFixed(1)} KB)
+                      </span>
+
+                      {sourceType === "image" && sourcePreviewUrl && (
+                        <img
+                          className="source-file-preview"
+                          src={sourcePreviewUrl}
+                          alt="Selected source preview"
+                        />
+                      )}
+
+                      {sourceType === "audio" && sourcePreviewUrl && (
+                        <audio
+                          className="source-file-preview"
+                          controls
+                          src={sourcePreviewUrl}
+                        />
+                      )}
+
+                      {sourceType === "video" && sourcePreviewUrl && (
+                        <video
+                          className="source-file-preview"
+                          controls
+                          src={sourcePreviewUrl}
+                        />
+                      )}
+                    </>
                   )}
                 </label>
               ) : (
@@ -549,9 +622,9 @@ function TransformationPage() {
               <span>Content</span>
 
               <strong>
-                {sourceType === "file"
+                {selectedSourceType?.kind === "file"
                   ? sourceFile
-                    ? "PDF selected"
+                    ? `${selectedSourceType.label} selected`
                     : "Not provided"
                   : sourceContent.trim() || sourceUrl.trim()
                     ? "Provided"

@@ -13,43 +13,49 @@ export function createTransformationSource({
   file,
   projectId,
 }) {
-  if (sourceType === "text") {
-    return createTextSource({
-      content,
-      title,
-      projectId,
-    });
+  switch (sourceType) {
+    case "text":
+      return createTextSource({
+        content,
+        title,
+        projectId,
+      });
+
+    case "prompt":
+      return createPromptSource({
+        content,
+        title,
+        projectId,
+      });
+
+    case "url":
+      return createUrlSource({
+        url,
+        title,
+        projectId,
+      });
+
+    case "pdf":
+    case "docx":
+    case "txt":
+    case "markdown":
+    case "image":
+    case "audio":
+    case "video":
+      if (!file) {
+        throw new Error(`Please select a ${sourceType.toUpperCase()} file.`);
+      }
+
+      return createFileSource({
+        file,
+        inputType: sourceType,
+        title,
+        projectId,
+      });
+
+    default:
+      throw new Error(
+        `Source type "${sourceType}" is not currently supported by the source API.`,
+      );
   }
-
-  if (sourceType === "prompt") {
-    return createPromptSource({
-      content,
-      title,
-      projectId,
-    });
-  }
-
-  if (sourceType === "url") {
-    return createUrlSource({
-      url,
-      title,
-      projectId,
-    });
-  }
-
-  if (sourceType === "file") {
-    if (!file) {
-      throw new Error("Please select a PDF file.");
-    }
-
-    return createFileSource({
-      file,
-      title,
-      projectId,
-    });
-  }
-
-  throw new Error(
-    `Source type "${sourceType}" is not currently supported by the source API.`,
-  );
 }

@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.base import AgentStatus
 from app.artifacts.service import ArtifactPersistenceService
+from app.ingestion.factory import create_ingestion_pipeline
+from app.ingestion.schemas import IngestionRequest, InputType
 from app.models.execution import Execution
 from app.models.source import Source
 from app.models.workflow import Workflow
@@ -441,14 +443,66 @@ class ExecutionOrchestrationService:
             ) from exc
 
         try:
-            return content.decode(
-                "utf-8",
+            input_type = InputType(
+                source.source_type,
             )
-        except UnicodeDecodeError as exc:
+        except ValueError as exc:
             raise ValueError(
-                "Source content is not UTF-8 text and "
-                "cannot yet be used directly as workflow input."
+                f"Unsupported source type: {source.source_type}"
             ) from exc
+
+        source_metadata = dict(
+            source.source_metadata or {},
+        )
+
+        request_kwargs: dict[str, Any] = {
+            "project_id": source.project_id,
+            "source_id": source.id,
+            "input_type": input_type,
+            "title": source.title,
+            "filename": source.original_filename,
+            "mime_type": source.mime_type,
+            "content": content,
+            "storage_key": source.storage_key,
+            "storage_uri": source.storage_uri,
+            "metadata": source_metadata,
+        }
+
+        # URL sources were already fetched during source ingestion.
+        # The stored bytes therefore represent the fetched document.
+        # Preserve the original URL as metadata.
+        if input_type == InputType.URL:
+            request_kwargs["url"] = source_metadata.get(
+                "source_url",
+            )
+
+        try:
+            ingestion_request = IngestionRequest(
+                **request_kwargs,
+            )
+
+            pipeline = create_ingestion_pipeline(
+                content_resolver=None,
+            )
+
+            canonical_content = await pipeline.run(
+                ingestion_request,
+            )
+
+        except Exception as exc:
+            raise ValueError(
+                "Failed to resolve source content through "
+                f"the ingestion pipeline: {exc}"
+            ) from exc
+
+        canonical_text = canonical_content.text
+
+        if not canonical_text.strip():
+            raise ValueError(
+                "Source content resolved to empty text."
+            )
+
+        return canonical_text
 
     async def _apply_workflow_result(
         self,
@@ -540,7 +594,7 @@ class ExecutionOrchestrationService:
             workflow_result=None,
             error=error,
             started_at=execution.started_at,
-            completed_at=completed_at,
+            completed_at=execution.completed_at,
             metrics=dict(
                 execution.metrics or {},
             ),

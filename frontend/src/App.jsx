@@ -1,90 +1,14 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
-import { useEffect, useState } from "react";
 
 import AppShell from "./components/layout/AppShell";
-
-import { getHealth } from "./services/api/health";
 
 import TransformationPage from "./features/transformation/TransformationPage";
 import ExecutionsPage from "./features/executions/ExecutionsPage";
 import ArtifactsPage from "./features/artifacts/ArtifactsPage";
+import DashboardPage from "./features/dashboard/DashboardPage";
 
 import { WorkspaceProvider } from "./context/WorkspaceContext";
-
-function DashboardPage() {
-  const [health, setHealth] = useState(null);
-  const [healthLoading, setHealthLoading] = useState(true);
-  const [healthError, setHealthError] = useState(null);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    async function loadHealth() {
-      try {
-        const data = await getHealth();
-
-        if (isMounted) {
-          setHealth(data);
-          setHealthError(null);
-        }
-      } catch (error) {
-        if (isMounted) {
-          setHealthError(error.message);
-        }
-      } finally {
-        if (isMounted) {
-          setHealthLoading(false);
-        }
-      }
-    }
-
-    loadHealth();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  const isHealthy =
-    health?.status === "healthy" && health?.database === "healthy";
-
-  let statusText = "Checking platform status...";
-
-  if (!healthLoading) {
-    if (isHealthy) {
-      statusText = "Platform operational";
-    } else if (healthError) {
-      statusText = "Platform unavailable";
-    } else {
-      statusText = "Platform requires attention";
-    }
-  }
-
-  return (
-    <section className="hero">
-      <span className="eyebrow">GENAI CONTENT PLATFORM</span>
-
-      <h1>
-        Transform information into
-        <span> intelligent content.</span>
-      </h1>
-
-      <p>
-        A multimodal AI platform for transforming reports, advisories, articles,
-        documents, images, videos, and prompts into audience-ready communication
-        artifacts.
-      </p>
-
-      <div className="status">
-        <span
-          className={`status-dot ${isHealthy ? "status-dot-healthy" : ""}`}
-        />
-
-        {statusText}
-      </div>
-    </section>
-  );
-}
+import KnowledgePage from "./features/knowledge/KnowledgePage";
 
 function PlaceholderPage({ title, description }) {
   return (
@@ -107,6 +31,8 @@ function App() {
             <Route path="/" element={<DashboardPage />} />
 
             <Route path="/transform" element={<TransformationPage />} />
+
+            <Route path="/knowledge" element={<KnowledgePage />} />
 
             <Route path="/executions" element={<ExecutionsPage />} />
 

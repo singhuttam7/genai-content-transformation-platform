@@ -165,12 +165,11 @@ async def test_create_source_delegates_to_ingestion_service() -> None:
     assert body["storage_key"] == "sources/test.txt"
     assert body["storage_uri"] == "storage://sources/test.txt"
     assert body["content_hash"] == "abc123"
-
     assert body["title"] == "Test Source"
     assert body["source_type"] == "text"
     assert body["canonical_text"] == "This is test source content."
-
     assert len(body["segments"]) == 1
+
     assert (
         body["segments"][0]["content"]
         == "This is test source content."
@@ -178,7 +177,6 @@ async def test_create_source_delegates_to_ingestion_service() -> None:
 
     assert body["metadata"]["fixture"] == "api-test"
     assert body["metadata"]["api_test"] is True
-
     assert body["provenance"]["ingestion"] == "test"
 
     mock_ingest.assert_awaited_once()
@@ -211,10 +209,12 @@ async def test_create_source_maps_value_error_to_422() -> None:
             )
 
     assert response.status_code == 422
+
     body = response.json()
+
     assert body["error"]["code"] == "HTTP_422"
     assert body["error"]["message"] == (
-    "Invalid ingestion request."
+        "Invalid ingestion request."
     )
     assert body["error"]["details"] is None
 
@@ -222,6 +222,7 @@ async def test_create_source_maps_value_error_to_422() -> None:
 @pytest.mark.asyncio
 async def test_create_source_preserves_source_id() -> None:
     source_id = uuid4()
+
     result = make_ingestion_result()
 
     result = result.model_copy(
@@ -264,3 +265,79 @@ async def test_create_source_preserves_source_id() -> None:
 
     assert response.status_code == 201
     assert response.json()["source_id"] == str(source_id)
+
+
+# ============================================================
+# URL Source API Tests
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_create_url_source_delegates_to_ingestion_service() -> None:
+    result = make_ingestion_result()
+
+    mock_ingest = AsyncMock(
+        return_value=result,
+    )
+
+    with patch(
+        "app.api.v1.sources.IngestionApplicationService.ingest",
+        mock_ingest,
+    ):
+        transport = ASGITransport(app=app)
+
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://test",
+        ) as client:
+            response = await client.post(
+                f"{API_PREFIX}/sources",
+                json={
+                    "input_type": "url",
+                    "title": "AI Article",
+                    "url": "https://example.com/article",
+                    "metadata": {
+                        "fixture": "url-api-test",
+                    },
+                },
+            )
+
+    assert response.status_code == 201
+
+    body = response.json()
+
+    assert body["source_id"] == str(result.source_id)
+    assert body["status"] == "completed"
+    assert body["storage_key"] == "sources/test.txt"
+    assert body["storage_uri"] == "storage://sources/test.txt"
+    assert body["content_hash"] == "abc123"
+
+    mock_ingest.assert_awaited_once()
+
+    ingestion_request = mock_ingest.await_args.kwargs["request"]
+
+    assert ingestion_request.input_type == InputType.URL
+    assert ingestion_request.url == "https://example.com/article"
+    assert ingestion_request.title == "AI Article"
+    assert ingestion_request.metadata == {
+        "fixture": "url-api-test",
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_url_source_rejects_missing_url() -> None:
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            f"{API_PREFIX}/sources",
+            json={
+                "input_type": "url",
+                "title": "Missing URL",
+            },
+        )
+
+    assert response.status_code == 422

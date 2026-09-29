@@ -75,3 +75,34 @@ export function createUrlSource({ url, title, projectId, metadata = {} }) {
     metadata,
   });
 }
+
+/**
+ * Upload and ingest a PDF source.
+ *
+ * Uses multipart/form-data because the backend expects
+ * the actual PDF file as an UploadFile.
+ *
+ * @param {Object} params
+ * @param {File} params.file
+ * @param {string} [params.title]
+ * @param {string} params.projectId
+ * @param {Object} [params.metadata]
+ */
+export function createFileSource({ file, title, projectId, metadata = {} }) {
+  if (!file) {
+    throw new Error("Please select a PDF file.");
+  }
+
+  const formData = new FormData();
+
+  formData.append("file", file);
+  formData.append("project_id", projectId);
+
+  if (title) {
+    formData.append("title", title);
+  }
+
+  formData.append("metadata", JSON.stringify(metadata));
+
+  return apiClient.post("/sources/upload", formData);
+}

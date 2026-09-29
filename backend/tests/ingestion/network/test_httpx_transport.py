@@ -592,3 +592,90 @@ async def test_pinned_http_transport_has_connection_pool() -> None:
 
     finally:
         await transport.aclose()
+
+
+@pytest.mark.asyncio
+async def test_tls_stream_exposes_ssl_socket_compatibly() -> None:
+    """
+    Verify that the TLS stream exposes its socket through
+    get_extra_info("socket") without losing the underlying
+    socket object.
+
+    This regression test protects the HTTPX/HTTPCore transport
+    integration from the production error:
+
+        Socket cannot be of type SSLSocket
+    """
+
+    client_socket, server_socket = socket.socketpair()
+
+    stream = _SocketNetworkStream(
+        client_socket,
+    )
+
+    try:
+        captured: dict[str, object] = {}
+
+        class FakeSSLSocket:
+            def setblocking(
+                self,
+                value: bool,
+            ) -> None:
+                captured["blocking"] = value
+
+            def settimeout(
+                self,
+                value: float | None,
+            ) -> None:
+                captured["timeout"] = value
+
+            def close(self) -> None:
+                captured["closed"] = True
+
+        context = ssl.create_default_context()
+
+        def fake_wrap_socket(
+            raw_socket: socket.socket,
+            *,
+            server_hostname: str,
+        ) -> FakeSSLSocket:
+            captured["raw_socket"] = raw_socket
+            captured["server_hostname"] = (
+                server_hostname
+            )
+
+            return FakeSSLSocket()
+
+        context.wrap_socket = fake_wrap_socket  # type: ignore[method-assign]
+
+        result = await stream.start_tls(
+            context,
+            server_hostname="example.com",
+        )
+
+        assert result is stream
+
+        assert (
+            captured["raw_socket"]
+            is client_socket
+        )
+
+        assert (
+            captured["server_hostname"]
+            == "example.com"
+        )
+
+        assert captured["blocking"] is False
+        assert captured["timeout"] is None
+
+        exposed_socket = stream.get_extra_info(
+            "socket",
+        )
+
+        assert exposed_socket is stream._socket
+
+        assert exposed_socket is not None
+
+    finally:
+        await stream.aclose()
+        server_socket.close()

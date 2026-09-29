@@ -208,6 +208,12 @@ class _SocketNetworkStream(
 ):
     """
     httpcore stream backed by a standard Python socket.
+
+    Normal TCP sockets use asyncio's socket helpers.
+
+    TLS sockets are represented by ssl.SSLSocket. Windows asyncio
+    does not support passing SSLSocket instances to sock_recv()
+    and sock_sendall(), so TLS I/O is performed in a worker thread.
     """
 
     def __init__(
@@ -227,13 +233,69 @@ class _SocketNetworkStream(
     ) -> bytes:
         """
         Read data asynchronously from the socket.
+
+        Plain sockets use asyncio's native socket operations.
+
+        SSLSocket instances are handled in a worker thread because
+        asyncio's sock_recv() does not accept SSLSocket on the
+        Windows event loop.
         """
+
+        if isinstance(self._socket, ssl.SSLSocket):
+            return await self._read_tls(
+                max_bytes=max_bytes,
+                timeout=timeout,
+            )
 
         loop = asyncio.get_running_loop()
 
         operation = loop.sock_recv(
             self._socket,
             max_bytes,
+        )
+
+        if timeout is None:
+            return await operation
+
+        return await asyncio.wait_for(
+            operation,
+            timeout,
+        )
+
+    async def _read_tls(
+        self,
+        max_bytes: int,
+        timeout: float | None,
+    ) -> bytes:
+        """
+        Read from an SSL socket in a worker thread.
+
+        The SSL socket is deliberately kept out of asyncio's
+        sock_recv() API because that API rejects SSLSocket objects
+        on the Windows event loop.
+        """
+
+        tls_socket = self._socket
+
+        def receive() -> bytes:
+            assert isinstance(
+                tls_socket,
+                ssl.SSLSocket,
+            )
+
+            if timeout is not None:
+                tls_socket.settimeout(timeout)
+
+            try:
+                return tls_socket.recv(
+                    max_bytes,
+                )
+            finally:
+                if timeout is not None:
+                    tls_socket.settimeout(None)
+
+        operation = asyncio.to_thread(
+            receive,
         )
 
         if timeout is None:
@@ -255,13 +317,71 @@ class _SocketNetworkStream(
     ) -> None:
         """
         Write data asynchronously to the socket.
+
+        Plain sockets use asyncio's native socket operations.
+
+        SSLSocket instances are handled in a worker thread because
+        asyncio's sock_sendall() does not accept SSLSocket objects
+        on the Windows event loop.
         """
+
+        if isinstance(self._socket, ssl.SSLSocket):
+            await self._write_tls(
+                buffer=buffer,
+                timeout=timeout,
+            )
+            return
 
         loop = asyncio.get_running_loop()
 
         operation = loop.sock_sendall(
             self._socket,
             buffer,
+        )
+
+        if timeout is None:
+            await operation
+            return
+
+        await asyncio.wait_for(
+            operation,
+            timeout,
+        )
+
+    async def _write_tls(
+        self,
+        buffer: bytes,
+        timeout: float | None,
+    ) -> None:
+        """
+        Write to an SSL socket in a worker thread.
+
+        The SSL socket is deliberately kept out of asyncio's
+        sock_sendall() API because that API rejects SSLSocket
+        objects on the Windows event loop.
+        """
+
+        tls_socket = self._socket
+
+        def send() -> None:
+            assert isinstance(
+                tls_socket,
+                ssl.SSLSocket,
+            )
+
+            if timeout is not None:
+                tls_socket.settimeout(timeout)
+
+            try:
+                tls_socket.sendall(
+                    buffer,
+                )
+            finally:
+                if timeout is not None:
+                    tls_socket.settimeout(None)
+
+        operation = asyncio.to_thread(
+            send,
         )
 
         if timeout is None:

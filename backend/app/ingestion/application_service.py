@@ -12,6 +12,10 @@ from app.ingestion.factory import (
     create_ingestion_pipeline,
 )
 
+from app.ingestion.fetchers.http import (
+    HTTPFetcher,
+)
+
 from app.ingestion.ocr.factory import (
     create_ocr_provider,
 )
@@ -50,6 +54,7 @@ from app.ingestion.results import (
 
 from app.ingestion.schemas import (
     IngestionRequest,
+    InputType,
     ProcessingStatus,
 )
 
@@ -80,6 +85,7 @@ class IngestionApplicationService:
 
     Responsibilities:
     - Generate a stable source identity.
+    - Fetch remote URL content when the source type is URL.
     - Persist the original source content.
     - Persist source metadata in PostgreSQL.
     - Resolve content for downstream processing.
@@ -115,7 +121,7 @@ class IngestionApplicationService:
                      ├── FFmpegFrameExtractor
                      └── VisionService
                             ↑
-                       Vision Factory
+                         Vision Factory
               ↓
         IngestionPipeline
     """
@@ -131,6 +137,7 @@ class IngestionApplicationService:
         asr_provider: ASRProvider | None = None,
         video_asr_service: VideoASRService | None = None,
         video_vision_service: VideoVisionService | None = None,
+        url_fetcher: HTTPFetcher | None = None,
     ) -> None:
         self.session = session
         self.storage = storage
@@ -228,6 +235,23 @@ class IngestionApplicationService:
         )
 
         # =====================================================
+        # URL fetcher
+        #
+        # Production default:
+        # Secure HTTPFetcher with URL validation,
+        # redirect validation, DNS security, content-type
+        # validation, timeout and response-size limits.
+        #
+        # Tests can inject a fake HTTPFetcher.
+        # =====================================================
+
+        self.url_fetcher = (
+            url_fetcher
+            if url_fetcher is not None
+            else HTTPFetcher()
+        )
+
+        # =====================================================
         # Ingestion pipeline
         # =====================================================
 
@@ -259,24 +283,39 @@ class IngestionApplicationService:
 
         Lifecycle:
 
-            Upload
-                ↓
-            DB persistence
-                ↓
-            Commit
-                ↓
-            Processing
-                ↓
-            COMPLETED / FAILED
+            URL source:
+                URL
+                 ↓
+                HTTPFetcher
+                 ↓
+                Fetched HTML/content
+                 ↓
+                Storage upload
+                 ↓
+                DB persistence
+                 ↓
+                Processing
+                 ↓
+                COMPLETED / FAILED
+
+            Other sources:
+
+                Upload
+                 ↓
+                DB persistence
+                 ↓
+                Processing
+                 ↓
+                COMPLETED / FAILED
 
         Database persistence failure:
 
             Upload
-                ↓
+              ↓
             DB failure
-                ↓
+              ↓
             Rollback
-                ↓
+              ↓
             Compensation
         """
 
@@ -292,17 +331,64 @@ class IngestionApplicationService:
         storage_object = None
 
         # =====================================================
-        # 2. Upload original source content
+        # 2. Resolve URL content before storage/pipeline
+        #
+        # HTMLDocumentProcessor intentionally does NOT perform
+        # network access. Therefore URL fetching belongs at the
+        # application/orchestration layer.
         # =====================================================
 
-        if request.content is not None:
+        source_request = request.model_copy(
+            update={
+                "source_id": source_id,
+            }
+        )
+
+        if request.input_type == InputType.URL:
+            if not request.url:
+                raise ValueError(
+                    "URL source requires a URL."
+                )
+
+            try:
+                fetched = await self.url_fetcher.fetch(
+                    request.url,
+                )
+            except Exception as exc:
+                raise ValueError(
+                    f"Failed to fetch URL: {exc}"
+                ) from exc
+
+            fetch_metadata = {
+                "source_url": request.url,
+                "final_url": fetched.final_url,
+                "http_status_code": fetched.status_code,
+                "fetched_content_type": fetched.content_type,
+            }
+
+            source_request = source_request.model_copy(
+                update={
+                    "content": fetched.content,
+                    "mime_type": fetched.content_type,
+                    "metadata": {
+                        **request.metadata,
+                        **fetch_metadata,
+                    },
+                }
+            )
+
+        # =====================================================
+        # 3. Upload original/resolved source content
+        # =====================================================
+
+        if source_request.content is not None:
             content = (
-                request.content
+                source_request.content
                 if isinstance(
-                    request.content,
+                    source_request.content,
                     bytes,
                 )
-                else request.content.encode(
+                else source_request.content.encode(
                     "utf-8"
                 )
             )
@@ -311,28 +397,18 @@ class IngestionApplicationService:
                 await self.storage.upload_source(
                     object_id=source_id,
                     filename=(
-                        request.filename
-                        or request.title
+                        source_request.filename
+                        or source_request.title
                         or "source"
                     ),
                     content_type=(
-                        request.mime_type
+                        source_request.mime_type
                         or "application/octet-stream"
                     ),
                     content=content,
-                    metadata=request.metadata,
+                    metadata=source_request.metadata,
                 )
             )
-
-        # =====================================================
-        # 3. Prepare source request
-        # =====================================================
-
-        source_request = request.model_copy(
-            update={
-                "source_id": source_id,
-            }
-        )
 
         # =====================================================
         # 4. Persist source metadata
@@ -346,11 +422,11 @@ class IngestionApplicationService:
                         storage_object.storage_key
                         if storage_object is not None
                         else None
-                        ),
+                    ),
                     storage_uri=(
                         storage_object.uri
                         if storage_object is not None
-                        else request.storage_uri
+                        else source_request.storage_uri
                     ),
                     content_hash=(
                         storage_object.content_hash
@@ -470,7 +546,7 @@ class IngestionApplicationService:
             storage_uri=(
                 storage_object.uri
                 if storage_object is not None
-                else request.storage_uri
+                else source_request.storage_uri
             ),
             content_hash=(
                 storage_object.content_hash
@@ -478,5 +554,5 @@ class IngestionApplicationService:
                 else None
             ),
             status=ProcessingStatus.COMPLETED,
-            metadata=request.metadata,
+            metadata=source_request.metadata,
         )

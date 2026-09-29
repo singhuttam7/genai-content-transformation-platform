@@ -63,6 +63,8 @@ function TransformationPage() {
 
   const [sourceUrl, setSourceUrl] = useState("");
 
+  const [sourceFile, setSourceFile] = useState(null);
+
   const [configuration, setConfiguration] = useState({
     objective: "",
     audience: "",
@@ -112,7 +114,16 @@ function TransformationPage() {
       return;
     }
 
-    if (sourceType !== "url" && !sourceContent.trim()) {
+    if (sourceType === "file" && !sourceFile) {
+      setSourceError("Please select a PDF file.");
+      return;
+    }
+
+    if (
+      sourceType !== "url" &&
+      sourceType !== "file" &&
+      !sourceContent.trim()
+    ) {
       setSourceError("Please provide source content.");
       return;
     }
@@ -125,6 +136,7 @@ function TransformationPage() {
         title: sourceTitle.trim(),
         content: sourceContent.trim(),
         url: sourceUrl.trim(),
+        file: sourceFile,
         projectId: workspace.project.id,
       });
 
@@ -232,12 +244,9 @@ function TransformationPage() {
 
       const executionResponse = await createExecution({
         transformationId: createdTransformation.id,
-
         workflowId: workflow.id,
-
         executionContext: {
           source_id: createdSource.source_id,
-
           transformation_type: transformationType,
         },
       });
@@ -254,7 +263,35 @@ function TransformationPage() {
 
   function handleSourceTypeChange(value) {
     setSourceType(value);
+    setSourceFile(null);
     resetSourceState();
+  }
+
+  function handleSourceFileChange(event) {
+    const file = event.target.files?.[0] ?? null;
+
+    setSourceFile(file);
+    setCreatedSource(null);
+    setSourceError(null);
+    resetDownstreamState();
+
+    if (!file) {
+      return;
+    }
+
+    const isPdf =
+      file.type === "application/pdf" ||
+      file.name.toLowerCase().endsWith(".pdf");
+
+    if (!isPdf) {
+      setSourceFile(null);
+      setSourceError("Please select a PDF file.");
+      return;
+    }
+
+    setSourceTitle((currentTitle) =>
+      currentTitle.trim() ? currentTitle : file.name.replace(/\.pdf$/i, ""),
+    );
   }
 
   function handleTransformationTypeChange(value) {
@@ -379,6 +416,23 @@ function TransformationPage() {
                     placeholder="https://example.com/article"
                   />
                 </label>
+              ) : sourceType === "file" ? (
+                <label className="form-field form-field-full">
+                  <span>PDF file</span>
+
+                  <input
+                    type="file"
+                    accept=".pdf,application/pdf"
+                    onChange={handleSourceFileChange}
+                  />
+
+                  {sourceFile && (
+                    <span className="source-type-description">
+                      Selected: {sourceFile.name} (
+                      {(sourceFile.size / 1024).toFixed(1)} KB)
+                    </span>
+                  )}
+                </label>
               ) : (
                 <label className="form-field form-field-full">
                   <span>
@@ -495,9 +549,13 @@ function TransformationPage() {
               <span>Content</span>
 
               <strong>
-                {sourceContent.trim() || sourceUrl.trim()
-                  ? "Provided"
-                  : "Not provided"}
+                {sourceType === "file"
+                  ? sourceFile
+                    ? "PDF selected"
+                    : "Not provided"
+                  : sourceContent.trim() || sourceUrl.trim()
+                    ? "Provided"
+                    : "Not provided"}
               </strong>
             </div>
 

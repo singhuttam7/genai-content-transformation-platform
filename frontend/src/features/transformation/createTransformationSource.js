@@ -1,4 +1,5 @@
 import {
+  createFileSource,
   createPromptSource,
   createTextSource,
   createUrlSource,
@@ -9,6 +10,7 @@ export function createTransformationSource({
   title,
   content,
   url,
+  file,
   projectId,
 }) {
   if (sourceType === "text") {
@@ -35,7 +37,19 @@ export function createTransformationSource({
     });
   }
 
+  if (sourceType === "file") {
+    if (!file) {
+      throw new Error("Please select a PDF file.");
+    }
+
+    return createFileSource({
+      file,
+      title,
+      projectId,
+    });
+  }
+
   throw new Error(
-    `Source type "${sourceType}" is not currently supported by the direct source API.`,
+    `Source type "${sourceType}" is not currently supported by the source API.`,
   );
 }

@@ -23,8 +23,28 @@ async function request(path, options = {}) {
   };
 
   if (body !== undefined) {
-    requestHeaders["Content-Type"] = "application/json";
-    requestOptions.body = JSON.stringify(body);
+    const isFormData =
+      typeof FormData !== "undefined" && body instanceof FormData;
+
+    if (isFormData) {
+      /*
+       * Do not set Content-Type manually for FormData.
+       *
+       * The browser automatically creates:
+       *
+       * multipart/form-data; boundary=...
+       *
+       * FastAPI needs this boundary to correctly parse
+       * UploadFile and Form fields.
+       */
+      delete requestHeaders["Content-Type"];
+      delete requestHeaders["content-type"];
+
+      requestOptions.body = body;
+    } else {
+      requestHeaders["Content-Type"] = "application/json";
+      requestOptions.body = JSON.stringify(body);
+    }
   }
 
   const response = await fetch(`${API_BASE_URL}${path}`, requestOptions);

@@ -50,6 +50,11 @@ class Source(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=True,
     )
 
+    storage_key: Mapped[str | None] = mapped_column(
+    String(1024),
+    nullable=True,
+    )
+
     storage_uri: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,

@@ -342,6 +342,11 @@ class IngestionApplicationService:
             source = (
                 await self.source_service.create_source(
                     request=source_request,
+                    storage_key=(
+                        storage_object.storage_key
+                        if storage_object is not None
+                        else None
+                        ),
                     storage_uri=(
                         storage_object.uri
                         if storage_object is not None

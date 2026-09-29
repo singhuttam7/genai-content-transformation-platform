@@ -4,6 +4,7 @@ from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.base import AgentRegistry
+from app.artifacts.service import ArtifactPersistenceService
 from app.database.session import get_db_session
 from app.ingestion.video.vision import VisionService
 from app.ingestion.video.vision_dependencies import (
@@ -11,6 +12,12 @@ from app.ingestion.video.vision_dependencies import (
 )
 from app.orchestration.execution.executor import WorkflowExecutor
 from app.rag.service import RAGRetrievalService
+from app.services.agent_runtime import create_agent_registry
+from app.services.llm_runtime import (
+    create_llm_gateway,
+    get_llm_model,
+)
+from app.services.rag_runtime import create_rag_retrieval_service
 from app.storage.dependencies import get_storage_service
 from app.storage.service import StorageService
 
@@ -24,6 +31,18 @@ DatabaseSession = Annotated[
 StorageServiceDependency = Annotated[
     StorageService,
     Depends(get_storage_service),
+]
+
+
+def get_artifact_persistence_service(
+    db: DatabaseSession,
+) -> ArtifactPersistenceService:
+    return ArtifactPersistenceService(session=db)
+
+
+ArtifactPersistenceServiceDependency = Annotated[
+    ArtifactPersistenceService,
+    Depends(get_artifact_persistence_service),
 ]
 
 
@@ -65,16 +84,39 @@ RAGRetrievalServiceDependency = Annotated[
 ]
 
 
-def get_workflow_executor() -> WorkflowExecutor:
+async def get_workflow_executor(
+    db: DatabaseSession,
+) -> WorkflowExecutor:
     """
-    Resolve the application workflow executor.
+    Resolve a workflow executor with the application's real
+    transformation-agent runtime.
 
-    The executor uses the domain AgentRegistry and remains responsible
-    only for workflow execution. API routes do not implement
-    orchestration logic.
+    The registry is constructed per request so the RAG retrieval
+    service can use the request-scoped database session.
     """
+    rag_retrieval_service = create_rag_retrieval_service(
+        db,
+    )
+
+    llm_gateway = create_llm_gateway()
+    model = get_llm_model()
+
+    agent_registry = create_agent_registry(
+        rag_retrieval_service=rag_retrieval_service,
+        llm_gateway=llm_gateway,
+        model=model,
+    )
+
+    if not isinstance(
+        agent_registry,
+        AgentRegistry,
+    ):
+        raise RuntimeError(
+            "Agent registry was not configured correctly."
+        )
+
     return WorkflowExecutor(
-        agent_registry=AgentRegistry(),
+        agent_registry=agent_registry,
     )
 
 

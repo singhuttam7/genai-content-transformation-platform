@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+
 from app.api.v1.rag import router as rag_router
 from app.api.v1.executions import router as executions_router
 from app.api.v1.artifacts import router as artifacts_router
@@ -7,6 +8,8 @@ from app.api.v1.sources import router as sources_router
 from app.api.v1.transformations import (
     router as transformations_router,
 )
+from app.api.v1 import development_workspace
+from app.api.v1 import development_workflow
 
 
 api_router = APIRouter()
@@ -17,3 +20,10 @@ api_router.include_router(sources_router)
 api_router.include_router(rag_router)
 api_router.include_router(executions_router)
 api_router.include_router(artifacts_router)
+
+api_router.include_router(
+    development_workspace.router,
+)
+api_router.include_router(
+    development_workflow.router,
+)

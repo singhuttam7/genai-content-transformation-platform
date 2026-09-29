@@ -10,7 +10,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.base import AgentStatus
+from app.artifacts.service import ArtifactPersistenceService
 from app.models.execution import Execution
+from app.models.source import Source
 from app.models.workflow import Workflow
 from app.orchestration.contracts import (
     WorkflowRequest,
@@ -18,6 +20,7 @@ from app.orchestration.contracts import (
     WorkflowStep,
 )
 from app.orchestration.execution.executor import WorkflowExecutor
+from app.storage.service import StorageService
 
 
 class ExecutionOrchestrationResult(BaseModel):
@@ -64,9 +67,11 @@ class ExecutionOrchestrationService:
     - loads the persisted workflow;
     - verifies the workflow version;
     - validates the workflow definition;
+    - resolves execution input;
     - builds a WorkflowRequest;
     - invokes the existing WorkflowExecutor;
     - updates the execution lifecycle;
+    - persists generated artifacts;
     - returns an execution-level result.
 
     It does not implement another workflow engine.
@@ -77,9 +82,13 @@ class ExecutionOrchestrationService:
         *,
         session: AsyncSession,
         executor: WorkflowExecutor,
+        storage: StorageService | None = None,
+        artifact_service: ArtifactPersistenceService | None = None,
     ) -> None:
         self.session = session
         self.executor = executor
+        self.storage = storage
+        self.artifact_service = artifact_service
 
     async def execute(
         self,
@@ -112,7 +121,7 @@ class ExecutionOrchestrationService:
             )
 
         try:
-            workflow_request = self._build_workflow_request(
+            workflow_request = await self._build_workflow_request(
                 execution=execution,
                 workflow=workflow,
             )
@@ -208,8 +217,8 @@ class ExecutionOrchestrationService:
 
         return result.scalar_one_or_none()
 
-    @staticmethod
-    def _build_workflow_request(
+    async def _build_workflow_request(
+        self,
         *,
         execution: Execution,
         workflow: Workflow,
@@ -316,13 +325,32 @@ class ExecutionOrchestrationService:
             execution.execution_context or {},
         )
 
+        # ---------------------------------------------------------
+        # Input resolution priority:
+        #
+        # 1. Explicit execution input
+        # 2. Workflow definition input
+        # 3. Persisted source content
+        # 4. Empty input
+        #
+        # Empty strings are treated as "no input" so that a
+        # development workflow containing "input": "" does not
+        # prevent source-backed execution from resolving the
+        # persisted source content.
+        # ---------------------------------------------------------
+
         workflow_input = execution_context.get(
             "input",
         )
 
-        if workflow_input is None:
+        if workflow_input in (None, ""):
             workflow_input = definition.get(
                 "input",
+            )
+
+        if workflow_input in (None, ""):
+            workflow_input = await self._resolve_source_input(
+                execution_context=execution_context,
             )
 
         if workflow_input is None:
@@ -356,6 +384,72 @@ class ExecutionOrchestrationService:
             metadata=metadata,
         )
 
+    async def _resolve_source_input(
+        self,
+        *,
+        execution_context: dict[str, Any],
+    ) -> str | None:
+        source_id_value = execution_context.get(
+            "source_id",
+        )
+
+        if source_id_value is None:
+            return None
+
+        if self.storage is None:
+            raise ValueError(
+                "Storage service is required to resolve source content."
+            )
+
+        try:
+            source_id = UUID(
+                str(source_id_value),
+            )
+        except (
+            TypeError,
+            ValueError,
+        ) as exc:
+            raise ValueError(
+                "Execution source_id must be a valid UUID."
+            ) from exc
+
+        result = await self.session.execute(
+            select(Source).where(
+                Source.id == source_id,
+            )
+        )
+
+        source = result.scalar_one_or_none()
+
+        if source is None:
+            raise ValueError(
+                "Source not found."
+            )
+
+        if not source.storage_key:
+            raise ValueError(
+                "Source storage key is missing."
+            )
+
+        try:
+            content = await self.storage.download(
+                source.storage_key,
+            )
+        except Exception as exc:
+            raise ValueError(
+                "Failed to load source content from storage."
+            ) from exc
+
+        try:
+            return content.decode(
+                "utf-8",
+            )
+        except UnicodeDecodeError as exc:
+            raise ValueError(
+                "Source content is not UTF-8 text and "
+                "cannot yet be used directly as workflow input."
+            ) from exc
+
     async def _apply_workflow_result(
         self,
         *,
@@ -386,7 +480,27 @@ class ExecutionOrchestrationService:
             ),
         }
 
-        await self.session.commit()
+        # Persist generated artifacts produced by the workflow.
+        if (
+            result.status == AgentStatus.COMPLETED
+            and isinstance(result.output, list)
+            and result.output
+        ):
+            artifact_service = self.artifact_service
+
+            if artifact_service is None:
+                artifact_service = ArtifactPersistenceService(
+                    session=self.session,
+                )
+                self.artifact_service = artifact_service
+
+            await artifact_service.persist_many(
+                envelopes=result.output,
+                transformation_id=execution.transformation_id,
+                execution_id=execution.id,
+            )
+        else:
+            await self.session.commit()
 
         try:
             await self.session.refresh(

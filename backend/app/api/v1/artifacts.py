@@ -6,8 +6,10 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import func, select
 
 from app.agents.transformation.contracts import ArtifactEnvelope
-from app.api.dependencies import DatabaseSession
-from app.artifacts.builder import ArtifactBuilder
+from app.api.dependencies import (
+    ArtifactPersistenceServiceDependency,
+    DatabaseSession,
+)
 from app.models.artifact import Artifact
 from app.models.execution import Execution
 from app.models.transformation import Transformation
@@ -16,6 +18,7 @@ from app.schemas.artifact import (
     ArtifactListResponse,
     ArtifactResponse,
 )
+
 
 router = APIRouter(
     prefix="/artifacts",
@@ -34,7 +37,6 @@ def _to_response(
     The Artifact model stores our JSON metadata in `artifact_metadata`,
     so we must explicitly map it instead of relying on from_attributes.
     """
-
     return ArtifactResponse(
         id=artifact.id,
         transformation_id=artifact.transformation_id,
@@ -61,19 +63,21 @@ def _to_response(
 async def create_artifact(
     request: ArtifactCreateRequest,
     db: DatabaseSession,
+    artifact_service: ArtifactPersistenceServiceDependency,
 ) -> ArtifactResponse:
     """
     Create and persist an artifact.
 
-    ArtifactBuilder remains responsible for:
-    - content normalization
-    - content hashing
-    - preparing persistence data
-
     The API layer is responsible for:
     - validating referenced resources
     - enforcing execution/transformation ownership
-    - persisting the resulting Artifact model
+    - constructing the artifact envelope
+
+    ArtifactPersistenceService is responsible for:
+    - building the persistence representation
+    - normalizing content
+    - calculating the content hash
+    - creating and persisting the Artifact model
     """
 
     transformation_result = await db.execute(
@@ -116,7 +120,7 @@ async def create_artifact(
     ):
         raise HTTPException(
             status_code=(
-                status.HTTP_422_UNPROCESSABLE_CONTENT
+                status.HTTP_422_UNPROCESSABLE_ENTITY
             ),
             detail=(
                 "Execution and transformation must "
@@ -131,34 +135,13 @@ async def create_artifact(
         metadata=request.metadata,
     )
 
-    builder = ArtifactBuilder()
-
-    build_data = builder.build(
+    artifact = await artifact_service.persist(
         envelope=envelope,
         transformation_id=transformation.id,
         execution_id=execution.id,
         status=request.status,
         storage_uri=request.storage_uri,
     )
-
-    artifact = Artifact(
-        transformation_id=build_data.transformation_id,
-        execution_id=build_data.execution_id,
-        artifact_type=build_data.artifact_type,
-        title=build_data.title,
-        content=build_data.content,
-        storage_uri=build_data.storage_uri,
-        content_hash=build_data.content_hash,
-        artifact_metadata=dict(
-            build_data.metadata,
-        ),
-        status=build_data.status,
-    )
-
-    db.add(artifact)
-
-    await db.commit()
-    await db.refresh(artifact)
 
     return _to_response(artifact)
 

@@ -63,6 +63,18 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     google_api_key: str | None = None
 
+        # ---------------------------------------------------------
+    # LLM Runtime
+    # ---------------------------------------------------------
+
+    llm_provider: str = "groq"
+    llm_model: str = ""
+    llm_timeout_seconds: float = 60.0
+    llm_max_tokens: int | None = None
+    llm_temperature: float = 0.0
+
+    groq_api_key: str | None = None
+
     # ---------------------------------------------------------
     # OCR
     # ---------------------------------------------------------
@@ -106,7 +118,7 @@ class Settings(BaseSettings):
     # RAG
     # ---------------------------------------------------------
 
-    embedding_model: str = "text-embedding-3-small"
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     vector_database_url: str | None = None
 
     # ---------------------------------------------------------

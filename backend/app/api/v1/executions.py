@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 
 from app.api.dependencies import (
     DatabaseSession,
+    StorageServiceDependency,
     WorkflowExecutorDependency,
 )
 from app.models.execution import Execution
@@ -36,6 +37,7 @@ async def create_execution(
     request: ExecutionCreateRequest,
     db: DatabaseSession,
     executor: WorkflowExecutorDependency,
+    storage: StorageServiceDependency,
 ) -> Execution:
     """
     Create and execute a workflow job.
@@ -111,6 +113,7 @@ async def create_execution(
     orchestration_service = ExecutionOrchestrationService(
         session=db,
         executor=executor,
+        storage=storage,
     )
 
     await orchestration_service.execute(

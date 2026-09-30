@@ -3,7 +3,6 @@ import { useNavigate } from "react-router-dom";
 import KnowledgeHeader from "./components/KnowledgeHeader";
 import KnowledgeSummary from "./components/KnowledgeSummary";
 import KnowledgeLibrary from "./components/KnowledgeLibrary";
-import KnowledgeListItem from "./components/KnowledgeListItem";
 import KnowledgeInspector from "./components/KnowledgeInspector";
 import KnowledgeMetadata from "./components/KnowledgeMetadata";
 import KnowledgeChunkViewer from "./components/KnowledgeChunkViewer";
@@ -66,19 +65,6 @@ function KnowledgePage() {
             loading={loading}
             onSelect={handleSelectSource}
           />
-
-          {sources.length > 0 && (
-            <div className="knowledge-list-items">
-              {sources.map((source) => (
-                <KnowledgeListItem
-                  key={source.id}
-                  source={source}
-                  selected={source.id === selectedSource?.id}
-                  onSelect={handleSelectSource}
-                />
-              ))}
-            </div>
-          )}
         </section>
 
         <section className="knowledge-detail-panel">

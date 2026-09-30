@@ -2,14 +2,59 @@ const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000/api/v1";
 
 /**
- * Central HTTP client for the GenAI Content Transformation Platform.
+ * Append query parameters to an API path.
  *
- * All frontend API services should use this client instead of
- * calling fetch() directly.
+ * Null and undefined values are omitted.
+ * Arrays are represented by repeated query parameters.
  */
+function buildRequestUrl(path, params) {
+  if (!params) {
+    return `${API_BASE_URL}${path}`;
+  }
 
+  const entries =
+    params instanceof URLSearchParams
+      ? Array.from(params.entries())
+      : Object.entries(params).flatMap(([key, value]) => {
+          if (value === undefined || value === null) {
+            return [];
+          }
+
+          if (Array.isArray(value)) {
+            return value.map((item) => [key, item]);
+          }
+
+          return [[key, value]];
+        });
+
+  if (entries.length === 0) {
+    return `${API_BASE_URL}${path}`;
+  }
+
+  const query = new URLSearchParams(
+    entries.map(([key, value]) => [key, String(value)]),
+  );
+
+  const separator = path.includes("?") ? "&" : "?";
+
+  return `${API_BASE_URL}${path}${separator}${query.toString()}`;
+}
+
+/**
+ * Central HTTP client for the GenAI Content
+ * Transformation Platform.
+ *
+ * All frontend API services should use this
+ * client instead of calling fetch() directly.
+ */
 async function request(path, options = {}) {
-  const { method = "GET", body, headers = {}, ...fetchOptions } = options;
+  const {
+    method = "GET",
+    body,
+    headers = {},
+    params,
+    ...fetchOptions
+  } = options;
 
   const requestHeaders = {
     Accept: "application/json",
@@ -34,8 +79,8 @@ async function request(path, options = {}) {
        *
        * multipart/form-data; boundary=...
        *
-       * FastAPI needs this boundary to correctly parse
-       * UploadFile and Form fields.
+       * FastAPI needs this boundary to correctly
+       * parse UploadFile and Form fields.
        */
       delete requestHeaders["Content-Type"];
       delete requestHeaders["content-type"];
@@ -43,11 +88,14 @@ async function request(path, options = {}) {
       requestOptions.body = body;
     } else {
       requestHeaders["Content-Type"] = "application/json";
+
       requestOptions.body = JSON.stringify(body);
     }
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, requestOptions);
+  const requestUrl = buildRequestUrl(path, params);
+
+  const response = await fetch(requestUrl, requestOptions);
 
   let responseData = null;
 

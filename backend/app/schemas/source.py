@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -13,7 +14,9 @@ from app.ingestion.schemas import (
 
 
 class SourceCreateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+    )
 
     project_id: UUID | None = None
     source_id: UUID | None = None
@@ -36,7 +39,9 @@ class SourceCreateRequest(BaseModel):
 
 
 class SourceResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(
+        from_attributes=True,
+    )
 
     source_id: UUID
     status: ProcessingStatus
@@ -61,3 +66,55 @@ class SourceResponse(BaseModel):
     provenance: dict[str, Any] = Field(
         default_factory=dict,
     )
+
+
+class SourceListItem(BaseModel):
+    """
+    Lightweight representation of a source for collection views.
+
+    This intentionally excludes extracted canonical content and
+    structural segments because list endpoints should not return
+    potentially large source payloads.
+    """
+
+    model_config = ConfigDict(
+        from_attributes=True,
+    )
+
+    id: UUID
+    project_id: UUID
+
+    source_type: InputType
+
+    title: str | None = None
+
+    original_filename: str | None = None
+
+    mime_type: str | None = None
+
+    storage_uri: str | None = None
+
+    content_hash: str | None = None
+
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+    )
+
+    status: ProcessingStatus
+
+    created_at: datetime
+    updated_at: datetime
+
+
+class SourceListResponse(BaseModel):
+    """
+    Collection response for source-library views.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+    items: list[SourceListItem]
+
+    total: int

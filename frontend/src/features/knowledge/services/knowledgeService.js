@@ -34,9 +34,15 @@ function normalizeSourcesResponse(response) {
   };
 }
 
-export async function fetchKnowledgeSources() {
+export async function fetchKnowledgeSources({ projectId }) {
+  if (!projectId) {
+    throw new Error("Workspace project is unavailable.");
+  }
+
   try {
-    const response = await getSources();
+    const response = await getSources({
+      project_id: projectId,
+    });
 
     return normalizeSourcesResponse(response);
   } catch (error) {

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
+import { useWorkspace } from "../../../context/WorkspaceContext";
+
 import { fetchKnowledgeSources } from "../services/knowledgeService";
 
 const INITIAL_STATE = {
@@ -11,41 +13,78 @@ const INITIAL_STATE = {
 };
 
 export function useKnowledge() {
+  const {
+    workspace,
+    loading: workspaceLoading,
+    error: workspaceError,
+  } = useWorkspace();
+
   const [state, setState] = useState(INITIAL_STATE);
 
-  const loadKnowledge = useCallback(async (isRefresh = false) => {
-    setState((current) => ({
-      ...current,
-      loading: !isRefresh && current.sources.length === 0,
-      error: null,
-    }));
+  const projectId = workspace?.project?.id ?? null;
 
-    try {
-      const result = await fetchKnowledgeSources();
+  const loadKnowledge = useCallback(
+    async (isRefresh = false) => {
+      if (workspaceLoading) {
+        return;
+      }
 
-      setState((current) => {
-        const selectedSource = current.selectedSource;
-
-        const selectedStillExists =
-          selectedSource &&
-          result.items.some((source) => source.id === selectedSource.id);
-
-        return {
+      if (workspaceError) {
+        setState((current) => ({
           ...current,
-          sources: result.items,
-          selectedSource: selectedStillExists ? selectedSource : null,
           loading: false,
-          error: null,
-        };
-      });
-    } catch (error) {
+          error: workspaceError,
+        }));
+
+        return;
+      }
+
+      if (!projectId) {
+        setState((current) => ({
+          ...current,
+          loading: false,
+          error: "Workspace project is unavailable.",
+        }));
+
+        return;
+      }
+
       setState((current) => ({
         ...current,
-        loading: false,
-        error: error?.message || "Unable to load knowledge sources.",
+        loading: !isRefresh && current.sources.length === 0,
+        error: null,
       }));
-    }
-  }, []);
+
+      try {
+        const result = await fetchKnowledgeSources({
+          projectId,
+        });
+
+        setState((current) => {
+          const selectedSource = current.selectedSource;
+
+          const selectedStillExists =
+            selectedSource &&
+            result.items.some((source) => source.id === selectedSource.id);
+
+          return {
+            ...current,
+            sources: result.items,
+            selectedSource: selectedStillExists ? selectedSource : null,
+            loading: false,
+            error: null,
+          };
+        });
+      } catch (error) {
+        setState((current) => ({
+          ...current,
+          loading: false,
+          error: error?.message || "Unable to load knowledge sources.",
+        }));
+      }
+    },
+    [projectId, workspaceLoading, workspaceError],
+  );
 
   const selectSource = useCallback((sourceId) => {
     if (!sourceId) {
@@ -83,9 +122,9 @@ export function useKnowledge() {
   return {
     sources: state.sources,
     selectedSource: state.selectedSource,
-    loading: state.loading,
+    loading: state.loading || workspaceLoading,
     detailLoading: state.detailLoading,
-    error: state.error,
+    error: state.error || workspaceError || null,
     loadKnowledge,
     selectSource,
     clearSelection,

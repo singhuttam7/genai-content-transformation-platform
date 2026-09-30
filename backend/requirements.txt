@@ -2,13 +2,14 @@
 # GenAI Content Transformation Platform
 # Backend dependency specification
 #
-# Python target: 3.14+
+# Python target: 3.13+
 # Project backend: FastAPI + async SQLAlchemy + PostgreSQL/pgvector
 #
 # Notes:
-# - This file intentionally contains comments by subsystem.
-# - System-level tools are NOT pip packages and are listed at the
-#   bottom of this file.
+# - Runtime dependencies are listed first.
+# - Development/test dependencies are listed separately below.
+# - System-level tools are NOT pip packages and are listed at
+#   the bottom of this file.
 # - API/provider credentials must be supplied through environment
 #   variables; never hard-code secrets in source code.
 # ============================================================
@@ -49,28 +50,26 @@ alembic>=1.16,<2.0
 # ============================================================
 # 4. VECTOR DATABASE / PGVECTOR
 #
-# pgvector is used for persistent embedding vectors and
-# similarity search inside PostgreSQL.
+# pgvector provides persistent embedding vectors and similarity
+# search inside PostgreSQL.
 #
-# The current project uses VECTOR(384) for:
+# Current project embedding:
 # sentence-transformers/all-MiniLM-L6-v2
-# ============================================================
-
-pgvector>=0.8,<1.0
-
-
-# ============================================================
-# 5. NUMERICAL / DATA PROCESSING
 #
-# NumPy is required by embedding/vector and ML components.
-# SciPy and scikit-learn support future evaluation and
-# classical ML utilities used by the platform.
+# Current vector dimension:
+# 384
+# ============================================================
+
+pgvector==0.5.0
+
+
+# ============================================================
+# 5. NUMERICAL / VECTOR PROCESSING
+#
+# NumPy is required by the local embedding/vector stack.
 # ============================================================
 
 numpy>=2.2,<3.0
-scipy>=1.15,<2.0
-scikit-learn>=1.6,<2.0
-pandas>=2.2,<3.0
 
 
 # ============================================================
@@ -79,8 +78,8 @@ pandas>=2.2,<3.0
 # Local embedding adapter:
 # sentence-transformers/all-MiniLM-L6-v2
 #
-# PyTorch is installed explicitly because Sentence Transformers
-# uses it as the local inference runtime.
+# PyTorch is the local inference runtime used by
+# Sentence Transformers.
 # ============================================================
 
 sentence-transformers>=6.0,<7.0
@@ -126,7 +125,7 @@ httpcore>=1.0,<2.0
 # ============================================================
 # 10. VIDEO / AUDIO / SPEECH INGESTION
 #
-# Faster-Whisper provides local speech-to-text/ASR.
+# Faster-Whisper provides local speech-to-text / ASR.
 # PyAV provides FFmpeg-backed media access for Python.
 # ============================================================
 
@@ -137,11 +136,12 @@ av>=14.0,<17.0
 # ============================================================
 # 11. LLM / RAG / AGENT FRAMEWORK
 #
-# These packages provide the orchestration primitives for the
-# later intelligence, RAG, agent and transformation stages.
+# These packages provide the orchestration primitives used by
+# the intelligence, RAG, agent and transformation layers.
 #
-# Provider-specific packages are kept separate so adapters can
-# remain provider-independent.
+# Provider-independent application abstractions remain inside
+# app.models_ai, app.rag, app.intelligence, app.agents and
+# app.orchestration.
 # ============================================================
 
 langchain>=0.3,<2.0
@@ -153,22 +153,24 @@ langgraph>=0.6,<2.0
 # ============================================================
 # 12. LLM PROVIDERS
 #
-# Groq is currently the primary low-cost/free-development
-# provider used by the project.
+# Groq is the current primary provider used by the project.
 #
-# Google Gemini and Mistral are included for provider adapters
-# and future multi-provider routing.
+# Google Gemini and Mistral are retained as optional provider
+# integrations for the multi-provider architecture but are not
+# required for the current default Groq runtime.
 # ============================================================
 
 langchain-groq>=0.3,<1.0
-langchain-google-genai>=2.0,<3.0
-langchain-mistralai>=0.2,<1.0
+
+# Optional provider integrations:
+# langchain-google-genai>=2.0,<3.0
+# langchain-mistralai>=0.2,<1.0
 
 
 # ============================================================
 # 13. WEB SEARCH / EXTERNAL KNOWLEDGE
 #
-# Tavily is used as a controlled web-search integration for
+# Tavily is an optional controlled web-search integration for
 # research/RAG workflows.
 # ============================================================
 
@@ -178,16 +180,15 @@ tavily-python>=0.7,<1.0
 # ============================================================
 # 14. RETRIES / RESILIENCE
 #
-# Used by provider and external-service boundaries where retry
-# execution is appropriate. Retry classification itself remains
-# inside the project's provider-independent error model.
+# Used at provider/external-service boundaries where retry
+# execution is appropriate.
 # ============================================================
 
 tenacity>=9.0,<10.0
 
 
 # ============================================================
-# 15. SERIALIZATION / UTILITIES
+# 15. SERIALIZATION / WORKFLOW UTILITIES
 # ============================================================
 
 PyYAML>=6.0,<7.0
@@ -196,10 +197,7 @@ PyYAML>=6.0,<7.0
 # ============================================================
 # 16. TESTING
 #
-# pytest is the project test runner.
-# pytest-asyncio supports the async test suite.
-# pytest-cov is useful for coverage gates.
-# anyio is used by FastAPI/async test infrastructure.
+# Development/test dependencies.
 # ============================================================
 
 pytest>=9.0,<10.0
@@ -211,8 +209,7 @@ anyio>=4.0,<5.0
 # ============================================================
 # 17. CODE QUALITY / DEVELOPMENT TOOLS
 #
-# These are development-only tools but are kept here so a new
-# environment can reproduce the project's development workflow.
+# Development-only tools.
 # ============================================================
 
 ruff>=0.12,<1.0
@@ -222,9 +219,8 @@ mypy>=1.16,<2.0
 # ============================================================
 # 18. OPTIONAL OBSERVABILITY
 #
-# Keep these commented until the corresponding observability
-# subsystem is implemented. Do NOT install infrastructure that
-# the application does not yet use.
+# Keep commented until the corresponding observability
+# subsystem is implemented and enabled.
 # ============================================================
 
 # prometheus-client>=0.22,<1.0
@@ -237,9 +233,8 @@ mypy>=1.16,<2.0
 # ============================================================
 # 19. OPTIONAL BACKGROUND JOB / CACHE INFRASTRUCTURE
 #
-# Reserved for the later worker/orchestration stages.
-# Keep commented until Redis/worker architecture is actually
-# introduced.
+# Reserved for later worker/orchestration stages.
+# Keep commented until Redis/Celery is actually introduced.
 # ============================================================
 
 # redis>=6.0,<7.0
@@ -249,7 +244,8 @@ mypy>=1.16,<2.0
 # ============================================================
 # 20. SYSTEM-LEVEL DEPENDENCIES
 #
-# The following are NOT installed by pip:
+# The following are NOT installed by pip.
+# ============================================================
 #
 # PostgreSQL 18+
 #   - PostgreSQL database server
@@ -260,25 +256,34 @@ mypy>=1.16,<2.0
 #
 # FFmpeg
 #   - Required for video/audio processing
+#   - Required by the media/video ingestion subsystem
 #
 # Tesseract OCR
 #   - Required by pytesseract
 #
+# Ollama
+#   - Required for the local vision provider
+#   - Default endpoint:
+#       http://localhost:11434
+#   - Current configured local vision model:
+#       gemma3:4b
+#
 # Git
-#   - Required for source control
+#   - Required for source control/development
 #
 # IMPORTANT:
-# Windows users must install FFmpeg and Tesseract separately
-# and make their executables available on PATH.
-# ============================================================
+# Windows users must install PostgreSQL, FFmpeg, Tesseract
+# and Ollama separately and make their required executables
+# available to the application.
 
 
 # ============================================================
 # 21. PROJECT ENVIRONMENT VARIABLES
 #
 # These are configuration values, NOT dependencies.
+# ============================================================
 #
-# Typical variables include:
+# Database:
 #
 # DATABASE_URL
 # POSTGRES_HOST
@@ -287,10 +292,22 @@ mypy>=1.16,<2.0
 # POSTGRES_USER
 # POSTGRES_PASSWORD
 #
+# LLM providers:
+#
 # GROQ_API_KEY
 # GOOGLE_API_KEY
 # MISTRAL_API_KEY
+#
+# External search:
+#
 # TAVILY_API_KEY
+#
+# Vision:
+#
+# VISION_ENABLED
+# VISION_PROVIDER
+# VISION_MODEL
+# VISION_BASE_URL
 #
 # Never place real credentials in this file.
 # ============================================================

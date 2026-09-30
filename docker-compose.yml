@@ -1,0 +1,120 @@
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg18
+    container_name: genai-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: genai_content_platform
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+
+    volumes:
+      - postgres_data:/var/lib/postgresql
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d genai_content_platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: genai-ollama
+    restart: unless-stopped
+
+    volumes:
+      - ollama_data:/root/.ollama
+
+    ports:
+      - "11434:11434"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+
+    container_name: genai-backend
+    restart: unless-stopped
+
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-docker}
+      DEBUG: ${DEBUG:-false}
+
+      LLM_PROVIDER: ${LLM_PROVIDER:-groq}
+      LLM_MODEL: ${LLM_MODEL:-openai/gpt-oss-120b}
+
+      DATABASE_URL: postgresql+asyncpg://postgres:${DATABASE_PASSWORD_URLENCODED}@postgres:5432/${POSTGRES_DB}
+
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost}
+
+      STORAGE_BACKEND: local
+      STORAGE_ROOT: /app/data/storage
+
+      SECRET_KEY: ${SECRET_KEY:-change-this-development-secret}
+
+      OCR_ENABLED: ${OCR_ENABLED:-true}
+      OCR_PROVIDER: tesseract
+      OCR_DEFAULT_LANGUAGE: ${OCR_DEFAULT_LANGUAGE:-eng}
+
+      ASR_ENABLED: ${ASR_ENABLED:-true}
+      ASR_PROVIDER: faster_whisper
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+
+      VISION_ENABLED: ${VISION_ENABLED:-true}
+      VISION_PROVIDER: local
+      VISION_MODEL: ${VISION_MODEL:-gemma3:4b}
+      VISION_BASE_URL: http://ollama:11434
+
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+
+    volumes:
+      - backend_storage:/app/data/storage
+      - model_cache:/root/.cache
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+
+    expose:
+      - "8000"
+
+    healthcheck:
+      test:
+        ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+
+    container_name: genai-frontend
+    restart: unless-stopped
+
+    ports:
+      - "80:80"
+
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+
+  backend_storage:
+
+  ollama_data:
+
+  model_cache:

@@ -109,7 +109,61 @@ async def cleanup_test_user_and_project(
             await session.delete(user)
 
         await session.commit()
+# ============================================================
+# Vision Disabled Regression Test
+# ============================================================
 
+
+@pytest.mark.asyncio
+async def test_ingestion_application_does_not_initialize_vision_when_disabled(
+    monkeypatch,
+):
+    """
+    Verify that the application service does not initialize the
+    Vision service when Vision is disabled.
+
+    This prevents non-video ingestion from failing during service
+    construction when VISION_ENABLED=false.
+    """
+
+    storage = get_storage_service()
+
+    # --------------------------------------------------------
+    # Disable Vision explicitly for this test.
+    # --------------------------------------------------------
+
+    monkeypatch.setattr(
+        "app.ingestion.application_service.settings.vision_enabled",
+        False,
+    )
+
+    # --------------------------------------------------------
+    # If the Vision factory is called, fail the test immediately.
+    # --------------------------------------------------------
+
+    def vision_factory_must_not_be_called():
+        raise AssertionError(
+            "get_vision_service() must not be called when "
+            "Vision is disabled."
+        )
+
+    monkeypatch.setattr(
+        "app.ingestion.application_service.get_vision_service",
+        vision_factory_must_not_be_called,
+    )
+
+    # --------------------------------------------------------
+    # Application service construction must succeed without
+    # initializing Vision.
+    # --------------------------------------------------------
+
+    async with SessionFactory() as session:
+        service = IngestionApplicationService(
+            session=session,
+            storage=storage,
+        )
+
+        assert service.video_vision_service is None
 
 # ============================================================
 # Existing End-to-End Application Test

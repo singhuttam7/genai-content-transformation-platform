@@ -4,6 +4,8 @@ from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
+
 from app.ingestion.content_resolver import (
     InputContentResolver,
 )
@@ -224,15 +226,20 @@ class IngestionApplicationService:
         # FFmpeg frame extraction + configured VisionService.
         #
         # Tests can inject a fake VideoVisionService.
+        #
+        # Vision is optional. When Vision is disabled and no
+        # service is explicitly injected, keep the dependency
+        # as None instead of initializing the Vision factory.
         # =====================================================
 
-        self.video_vision_service = (
-            video_vision_service
-            if video_vision_service is not None
-            else VideoVisionService(
+        if video_vision_service is not None:
+            self.video_vision_service = video_vision_service
+        elif settings.vision_enabled:
+            self.video_vision_service = VideoVisionService(
                 vision_service=get_vision_service(),
             )
-        )
+        else:
+            self.video_vision_service = None
 
         # =====================================================
         # URL fetcher

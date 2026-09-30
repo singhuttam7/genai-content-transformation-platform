@@ -67,8 +67,15 @@ data/embeddings/*
 # Generated artifacts
 # ============================================================
 
+# Generated storage contents
 backend/app/storage/files/*
 backend/app/storage/artifacts/*
+
+# Keep storage Python source files tracked
+!backend/app/storage/files/
+!backend/app/storage/files/*.py
+!backend/app/storage/artifacts/
+!backend/app/storage/artifacts/*.py
 
 # ============================================================
 # Coverage

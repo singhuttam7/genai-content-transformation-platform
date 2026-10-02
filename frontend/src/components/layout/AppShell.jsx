@@ -88,11 +88,11 @@ function AppShell({ children }) {
       <aside className={sidebarClassName}>
         <div className="app-brand">
           <div className="app-brand-mark" aria-hidden="true">
-            ✦
+            C2A
           </div>
 
           <div className="app-brand-copy">
-            <div className="app-brand-name">GenAI Platform</div>
+            <div className="app-brand-name">Context2Artifact</div>
             <div className="app-brand-subtitle">Content Transformation</div>
           </div>
         </div>

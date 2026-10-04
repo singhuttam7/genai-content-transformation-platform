@@ -1023,7 +1023,7 @@ Avoid unnecessary architectural changes to already-validated components.
 
 ## 27. Final Vision
 
-Context2Artifact is designed to move GenAI beyond simple prompt-to-text
+Context2Artifact is designed to move Generative AI beyond simple prompt-to-text
 generation.
 
 The platform focuses on a complete transformation lifecycle:

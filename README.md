@@ -21,7 +21,7 @@ provenance and artifact persistence.
   ----------------------- ------------------------------------------------------
   Product                 Context2Artifact
   SIH Problem Statement   SIH26154
-  Problem                 Gen AI Platform for Automated Content Transformation
+  Problem                 Generative AI Platform for Automated Content Transformation
   Theme                   Blockchain & Cybersecurity
   Category                Software
   Team ID                 121654

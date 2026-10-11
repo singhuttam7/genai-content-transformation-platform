@@ -1055,3 +1055,12 @@ The goal is to make communication transformation:
 
 > **Context2Artifact --- One Source. Understood in Context. Transformed
 > into Purpose-Specific Artifacts.**
+>
+> 
+## License
+
+Copyright (c) 2026 Your Name. All rights reserved. 
+
+This software and its source code are strictly private and confidential. 
+Unauthorized copying, modification, or distribution of this file, via 
+any medium, is strictly prohibited. 

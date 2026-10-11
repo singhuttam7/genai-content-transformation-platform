@@ -1059,7 +1059,7 @@ The goal is to make communication transformation:
 > 
 ## License
 
-Copyright (c) 2026 Your Name. All rights reserved. 
+Copyright (c) 2026 Uttam Kumar Singh. All rights reserved. 
 
 This software and its source code are strictly private and confidential. 
 Unauthorized copying, modification, or distribution of this file, via 
